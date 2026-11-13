@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ant 批量控制台</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --line:#e3e6ea; --text:#1b1f24; --dim:#6b7280;
+    --accent:#2563eb; --ok:#12805c; --warn:#b45309; --bad:#c0392b; --chip:#eef2ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;background:var(--panel);
+         border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+  header h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+  .dot{width:9px;height:9px;border-radius:50%;background:#c9ced6;display:inline-block}
+  .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(18,128,92,.15)}
+  .dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(192,57,43,.12)}
+  header .meta{color:var(--dim);font-size:12px;display:flex;align-items:center;gap:8px}
+  main{padding:18px 20px 60px;max-width:1360px;margin:0 auto;display:grid;gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h2{font-size:13px;margin:0 0 12px;font-weight:650;color:#111827;
+           display:flex;align-items:center;gap:8px}
+  .card h2 .tag{font-size:11px;font-weight:500;color:var(--dim);background:#f3f4f6;
+                border:1px solid var(--line);border-radius:999px;padding:1px 8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:980px){.grid2{grid-template-columns:1fr}}
+  textarea{width:100%;min-height:150px;resize:vertical;padding:10px 12px;border:1px solid var(--line);
+           border-radius:8px;font:12.5px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;
+           background:#fcfcfd;color:var(--text);outline:none}
+  textarea:focus{border-color:var(--accent);background:#fff}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .fld{display:flex;flex-direction:column;gap:4px}
+  .fld label{font-size:11.5px;color:var(--dim)}
+  input[type=text],input[type=number],select{padding:6px 9px;border:1px solid var(--line);
+    border-radius:7px;background:#fcfcfd;color:var(--text);font-size:13px;outline:none;min-width:0}
+  input:focus,select:focus{border-color:var(--accent);background:#fff}
+  button{padding:7px 13px;border:1px solid var(--line);border-radius:7px;background:#fff;
+         color:var(--text);font-size:13px;cursor:pointer;transition:.12s}
+  button:hover{border-color:#c8cdd4;background:#fafbfc}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{background:#1d4ed8}
+  button.danger{color:var(--bad);border-color:#f0cfcb}
+  button.danger:hover{background:#fdf3f2}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.sm{padding:3px 9px;font-size:12px}
+  .hint{font-size:12px;color:var(--dim)}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 9px;
+        border-radius:999px;background:var(--chip);color:#3730a3;border:1px solid #dfe4ff}
+  .pill.ok{background:#eafaf2;color:var(--ok);border-color:#c7ecda}
+  .pill.warn{background:#fff7e6;color:var(--warn);border-color:#f3e0b5}
+  .pill.bad{background:#fdf0ee;color:var(--bad);border-color:#f3d2cd}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--dim);font-weight:500;padding:6px 8px;border-bottom:1px solid var(--line);
+     white-space:nowrap;font-size:11.5px}
+  td{padding:6px 8px;border-bottom:1px solid #f0f2f5;vertical-align:middle}
+  tr.excluded td{color:#a8adb5;text-decoration:line-through}
+  .scroll{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  .scroll table th{position:sticky;top:0;background:#fafbfc;z-index:1}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .errs{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:#fdf3f2;color:var(--bad);
+        font-size:12.5px;border:1px solid #f3d2cd;white-space:pre-wrap}
+  .warns{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:#fffaeb;color:var(--warn);
+         font-size:12.5px;border:1px solid #f3e0b5;white-space:pre-wrap}
+  .empty{color:var(--dim);font-size:12.5px;padding:18px;text-align:center}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .spacer{flex:1}
+  .kbd{font-size:11px;color:var(--dim)}
+  code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Ant 批量控制台</h1>
+  <div class="meta">
+    <span id="connText">未连接</span>
+    <span>·</span>
+    <span>Ant API</span>
+    <input type="text" id="antPort" value="19900" style="width:74px;padding:3px 7px">
+    <button class="sm" id="btnPort">连接</button>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill" id="profileCount">实例 —</span>
+  <button class="sm" id="btnRefresh">刷新</button>
+</header>
+
+<main>
+  <div class="grid2">
+    <section class="card">
+      <h2>① 账号 <span class="tag" id="acctTag">0 个</span></h2>
+      <textarea id="accounts" placeholder="每行一个，字段用 ---- 分隔，顺序不限：
+Xxx12883----R32HZLJPLA37Q7PN----CaseyKumlander2486@outlook.com
+（密码 ---- 2FA密钥 ---- 账号；含 @ 的当账号、16/26/32 位 Base32 当 2FA、剩下的当密码）
+
+也支持：账号----密码----2FA / 账号----密码 / 只有账号"></textarea>
+      <div class="row" style="margin-top:8px">
+        <span class="hint" id="acctSummary">—</span>
+        <div class="spacer"></div>
+        <button class="sm" id="btnParse">解析</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>② 代理池 <span class="tag" id="proxyTag">0 条</span></h2>
+      <textarea id="proxies" placeholder="每行一条，支持这些写法：
+85.198.46.103:6371:jsrfhotb:3k5mr0hrc4cf
+socks5://user:pass@45.132.75.11:8080
+http://1.2.3.4:3128:user:pass
+1.2.3.4:1080            ← 无鉴权
+# 开头的行是注释"></textarea>
+      <div class="row" style="margin-top:8px">
+        <div class="fld">
+          <label>目标国家码</label>
+          <input type="text" id="expectCode" value="AU" style="width:70px">
+        </div>
+        <button class="sm" id="btnCheck">穿代理检测出口</button>
+        <button class="sm" id="btnExclude" disabled>剔除非目标国</button>
+        <button class="sm" id="btnUndo" disabled>撤销</button>
+        <div class="spacer"></div>
+        <span class="pill" id="checkSummary" style="display:none"></span>
+      </div>
+      <div class="scroll" id="checkWrap" style="margin-top:10px;display:none">
+        <table>
+          <thead><tr><th>#</th><th>出口 IP</th><th>国家</th><th>城市</th><th>延迟</th><th>状态</th></tr></thead>
+          <tbody id="checkBody"></tbody>
+        </table>
+      </div>
+      <div class="warns" id="checkWarn" style="display:none"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>③ 分配与创建</h2>
+    <div class="row" style="gap:12px">
+      <div class="fld"><label>每 IP 带几个实例</label><input type="number" id="perIp" value="1" min="1" style="width:80px"></div>
+      <div class="fld"><label>分配方式</label>
+        <select id="mode"><option value="seq">连续（IP1 给前 k 个）</option><option value="interleave">交替（轮流发牌）</option></select>
+      </div>
+      <div class="fld"><label>IP 不够时</label>
+        <select id="onShort"><option value="reuse">循环复用</option><option value="error">直接报错</option></select>
+      </div>
+      <div class="fld"><label>实例名模板</label><input type="text" id="nameTpl" value="{u}" style="width:120px"></div>
+      <div class="fld"><label>指纹种子前缀</label><input type="text" id="seedBase" value="7" style="width:90px"></div>
+      <div class="fld"><label>标签</label><input type="text" id="tags" value="bybit" style="width:110px"></div>
+      <label class="hint" style="display:flex;align-items:center;gap:6px;margin-top:16px">
+        <input type="checkbox" id="direct"> 直连（不挂代理）
+      </label>
+      <label class="hint" style="display:flex;align-items:center;gap:6px;margin-top:16px">
+        <input type="checkbox" id="autoOpen"> 建完立刻打开
+      </label>
+      <div class="spacer"></div>
+      <div class="row" style="gap:8px;margin-top:4px">
+        <span class="pill" id="capacity">—</span>
+        <button id="btnPreview">预览分配</button>
+        <button class="primary" id="btnCreate">批量创建</button>
+      </div>
+    </div>
+    <div class="errs" id="createErr" style="display:none"></div>
+    <div class="warns" id="createWarn" style="display:none"></div>
+    <div class="scroll" id="previewWrap" style="margin-top:12px;display:none">
+      <table>
+        <thead><tr><th>#</th><th>实例名</th><th>账号</th><th>2FA</th><th>代理</th></tr></thead>
+        <tbody id="previewBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>④ 实例 <span class="tag" id="listTag">0</span></h2>
+    <div class="toolbar">
+      <button class="sm" id="btnSelAll">全选</button>
+      <button class="sm" id="btnSelNone">取消</button>
+      <button class="sm" id="btnOpen">打开选中</button>
+      <button class="sm" id="btnStop">停止选中</button>
+      <button class="sm danger" id="btnDelete">删除选中</button>
+      <div class="spacer"></div>
+      <input type="text" id="filter" placeholder="按名称 / 代理过滤" style="width:200px">
+      <span class="hint" id="selCount">已选 0</span>
+    </div>
+    <div class="scroll" style="max-height:440px">
+      <table>
+        <thead><tr>
+          <th style="width:28px"><input type="checkbox" id="chkAll"></th>
+          <th>实例名</th><th>状态</th><th>调试端口</th><th>代理</th><th>快捷码</th><th>创建时间</th>
+        </tr></thead>
+        <tbody id="listBody"><tr><td colspan="7" class="empty">点右上角「刷新」拉取实例</td></tr></tbody>
+      </table>
+    </div>
+    <div class="errs" id="listErr" style="display:none"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = { accounts: [], poolBackup: null, lastCheck: [], selected: new Set(), items: [] };
+
+function setErr(el, text) {
+  if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block'; el.textContent = text;
+}
+function setWarn(el, text) {
+  if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block'; el.textContent = text;
+}
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  };
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({ ok: false, error: '返回不是 JSON' }));
+  return data;
+}
+function splitLines(text) {
+  return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(s => s.trim());
+}
+
+// ---------- 连接 ----------
+async function health(port) {
+  const body = port ? { port } : undefined;
+  const data = body ? await api('/api/ant-port', body) : await api('/api/health');
+  $('dot').className = 'dot ' + (data.ok ? 'on' : 'off');
+  $('connText').textContent = data.ok ? ('已连接 :' + data.antPort) : ('未连接 :' + (data.antPort || '?'));
+  if (data.antPort) $('antPort').value = data.antPort;
+  if (data.ok) { await refreshList(); }
+  else if (data.error) setErr($('listErr'), data.error);
+  return data;
+}
+async function refreshList() {
+  const data = await api('/api/list');
+  if (!data.ok) { setErr($('listErr'), data.error || '拉取失败'); return; }
+  setErr($('listErr'), '');
+  state.items = data.items || [];
+  $('profileCount').textContent = '实例 ' + state.items.length;
+  $('listTag').textContent = state.items.length;
+  renderList();
+}
+function renderList() {
+  const kw = $('filter').value.trim().toLowerCase();
+  const rows = state.items.filter(p => !kw ||
+    (p.name || '').toLowerCase().includes(kw) || (p.proxyConfig || '').toLowerCase().includes(kw));
+  const body = $('listBody');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">没有匹配的实例</td></tr>';
+    updateSelCount(); return;
+  }
+  body.innerHTML = rows.map(p => {
+    const on = state.selected.has(p.id);
+    return `<tr>
+      <td><input type="checkbox" data-id="${p.id}" ${on ? 'checked' : ''}></td>
+      <td>${esc(p.name || '')}</td>
+      <td>${p.running ? '<span class="pill ok">运行中</span>' : '<span class="pill">已停止</span>'}</td>
+      <td class="mono">${p.debugPort || '—'}</td>
+      <td class="mono">${esc(shortProxy(p.proxyConfig))}</td>
+      <td class="mono">${esc(p.launchCode || '—')}</td>
+      <td class="mono">${esc((p.createdAt || '').replace('T', ' ').slice(0, 16))}</td>
+    </tr>`;
+  }).join('');
+  body.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.onchange = () => {
+      if (cb.checked) state.selected.add(cb.dataset.id); else state.selected.delete(cb.dataset.id);
+      updateSelCount();
+    };
+  });
+  updateSelCount();
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function shortProxy(cfg) {
+  if (!cfg) return '直连';
+  try {
+    const u = new URL(cfg);
+    return u.protocol.replace(':', '') + '://' + (u.username ? u.username + '@' : '') + u.host;
+  } catch { return cfg; }
+}
+function updateSelCount() { $('selCount').textContent = '已选 ' + state.selected.size; }
+
+// ---------- 解析 ----------
+async function parseNow() {
+  const data = await api('/api/parse', {
+    accounts: $('accounts').value, proxies: $('proxies').value, nameTemplate: $('nameTpl').value
+  });
+  if (!data.ok) { setErr($('createErr'), data.error || '解析失败'); return; }
+  state.accounts = data.accounts || [];
+  $('acctTag').textContent = state.accounts.length + ' 个';
+  $('proxyTag').textContent = (data.proxyCount || 0) + ' 条';
+  $('acctSummary').textContent = `识别到 ${state.accounts.length} 个账号，其中 ${data.withTotp} 个带 2FA` +
+    (data.duplicates?.length ? ` · ${data.duplicates.length} 个名称与现有实例重名` : '');
+  setErr($('createErr'), data.duplicates?.length
+    ? '这些实例名已存在，创建前请改名称模板（加 {seq}）：\n' + data.duplicates.slice(0, 8).join('、')
+    : '');
+  setWarn($('createWarn'), (data.proxyErrors || []).length
+    ? '有 ' + data.proxyErrors.length + ' 行代理认不出：\n' + data.proxyErrors.slice(0, 6).join('\n') : '');
+  const need = state.accounts.length;
+  const cap = (data.proxyCount || 0) * Math.max(1, +$('perIp').value || 1);
+  const c = $('capacity');
+  c.textContent = `${data.proxyCount || 0} × ${Math.max(1, +$('perIp').value || 1)} = ${cap} 实例 / 需 ${need}`;
+  c.className = 'pill ' + (need === 0 ? '' : cap >= need ? 'ok' : 'warn');
+}
+
+// ---------- 检测 ----------
+async function checkProxies() {
+  const btn = $('btnCheck');
+  btn.disabled = true; btn.textContent = '检测中…';
+  $('checkWrap').style.display = 'block';
+  $('checkBody').innerHTML = '<tr><td colspan="6" class="empty">穿代理查询中，别关页面…</td></tr>';
+  try {
+    const data = await api('/api/proxies/check', {
+      proxies: $('proxies').value, expectCode: $('expectCode').value
+    });
+    state.lastCheck = data.results || [];
+    renderCheck();
+    const sum = $('checkSummary');
+    sum.style.display = 'inline-flex';
+    sum.textContent = data.summary || '';
+    const good = state.lastCheck.filter(r => r.ok && (!($('expectCode').value.trim()) ||
+      r.code === $('expectCode').value.trim().toUpperCase())).length;
+    sum.className = 'pill ' + (good === state.lastCheck.length && good > 0 ? 'ok' : good === 0 ? 'bad' : 'warn');
+    $('btnExclude').disabled = false;
+    $('btnExclude').textContent = `剔除非${$('expectCode').value.trim().toUpperCase() || '目标国'}`;
+    setWarn($('checkWarn'), (data.notChecked ? `还有 ${data.notChecked} 条超出单次上限（60）没检测，已保留。\n` : '')
+      + ((data.errors || []).length ? '认不出的行：\n' + data.errors.slice(0, 6).join('\n') : ''));
+  } catch (e) {
+    setWarn($('checkWarn'), '检测失败：' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '穿代理检测出口';
+  }
+}
+function renderCheck() {
+  const want = $('expectCode').value.trim().toUpperCase();
+  const excluded = new Set((state.excludedRaw || []));
+  $('checkBody').innerHTML = state.lastCheck.map((r, i) => {
+    const bad = !r.ok || (want && r.code !== want);
+    const isEx = excluded.has(r.raw);
+    return `<tr class="${isEx ? 'excluded' : ''}">
+      <td>${i + 1}</td>
+      <td class="mono">${esc(r.ip || r.raw)}</td>
+      <td>${esc(r.country || '—')} ${r.code ? `<span class="hint">${esc(r.code)}</span>` : ''}</td>
+      <td>${esc(r.city || '—')}</td>
+      <td class="mono">${r.ms ? r.ms + 'ms' : '—'}</td>
+      <td>${isEx ? '<span class="pill">已排除</span>' : r.ok ? (bad ? '<span class="pill warn">非目标国</span>' : '<span class="pill ok">可用</span>')
+        : `<span class="pill bad">${esc(r.error || '失败')}</span>`}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="empty">没有结果</td></tr>';
+}
+function excludeOthers() {
+  const want = $('expectCode').value.trim().toUpperCase();
+  if (!want) return alert('先填目标国家码');
+  if (!state.lastCheck.length) return;
+  if (!state.poolBackup) state.poolBackup = $('proxies').value;
+  const keep = [], drop = [], excluded = [];
+  for (const line of splitLines($('proxies').value)) {
+    const hit = state.lastCheck.find(r => r.raw === line);
+    if (!hit) { keep.push(line); continue; }
+    if (hit.ok && hit.code === want) keep.push(line);
+    else { drop.push(line); excluded.push(line); }
+  }
+  state.excludedRaw = excluded;
+  $('proxies').value = keep.join('\n');
+  $('btnUndo').disabled = false;
+  $('btnExclude').disabled = true;
+  setWarn($('checkWarn'), `已从代理池排除 ${drop.length} 个非 ${want} 出口，剩 ${keep.length} 个。点「撤销」可原样还原。`);
+  renderCheck(); parseNow();
+}
+function undoExclude() {
+  if (state.poolBackup === null) return;
+  $('proxies').value = state.poolBackup;
+  state.poolBackup = null; state.excludedRaw = [];
+  $('btnUndo').disabled = true;
+  setWarn($('checkWarn'), '已还原代理池。');
+  renderCheck(); parseNow();
+}
+
+// ---------- 预览 / 创建 ----------
+function params() {
+  return {
+    accounts: $('accounts').value, proxies: $('proxies').value,
+    perIp: +$('perIp').value || 1, mode: $('mode').value, onShort: $('onShort').value,
+    nameTemplate: $('nameTpl').value, direct: $('direct').checked,
+  };
+}
+async function preview() {
+  const data = await api('/api/allocate', params());
+  setErr($('createErr'), (data.errors || []).join('\n'));
+  setWarn($('createWarn'), (data.warnings || []).join('\n'));
+  if (!data.ok) { $('previewWrap').style.display = 'none'; return; }
+  $('previewWrap').style.display = 'block';
+  $('previewBody').innerHTML = data.preview.map(r => `<tr>
+    <td>${r.seq}</td><td>${esc(r.name)}</td><td class="mono">${esc(r.account)}</td>
+    <td>${r.totp ? '<span class="pill ok">有</span>' : '<span class="hint">—</span>'}</td>
+    <td class="mono">${esc(r.proxy)}</td></tr>`).join('');
+  const c = $('capacity');
+  c.textContent = `覆盖 ${data.capacity} / 需 ${data.need}`;
+  c.className = 'pill ' + (data.capacity >= data.need ? 'ok' : 'warn');
+}
+async function createNow() {
+  const btn = $('btnCreate');
+  btn.disabled = true; btn.textContent = '创建中…';
+  try {
+    const data = await api('/api/create', {
+      ...params(),
+      seedBase: $('seedBase').value,
+      tags: $('tags').value.split(/[,，\s]+/).filter(Boolean),
+      autoOpen: $('autoOpen').checked,
+    });
+    if (!data.ok) { setErr($('createErr'), (data.errors || [data.error]).join('\n')); return; }
+    setErr($('createErr'), '');
+    setWarn($('createWarn'), [
+      `创建成功 ${data.created.length} 个` + (data.failed.length ? `，失败 ${data.failed.length} 个` : ''),
+      ...(data.warnings || []),
+      ...(data.failed || []).map(f => `✗ ${f.name}：${f.error}`),
+    ].join('\n'));
+    await refreshList();
+  } finally {
+    btn.disabled = false; btn.textContent = '批量创建';
+  }
+}
+
+// ---------- 实例操作 ----------
+async function doAction(action) {
+  const ids = [...state.selected];
+  if (!ids.length) return alert('先勾选实例');
+  if (action === 'delete' && !confirm(`删除 ${ids.length} 个实例？Ant 里删掉后数据目录也会清掉，不可恢复。`)) return;
+  const data = await api('/api/action', { action, ids });
+  if (!data.ok) { setErr($('listErr'), data.error); return; }
+  if ((data.failed || []).length) setErr($('listErr'), data.failed.map(f => f.id + '：' + f.error).join('\n'));
+  else setErr($('listErr'), '');
+  if (action === 'delete') state.selected.clear();
+  await refreshList();
+}
+
+// ---------- 绑定 ----------
+$('btnRefresh').onclick = () => health();
+$('btnPort').onclick = () => health(+$('antPort').value || 19900);
+$('btnParse').onclick = parseNow;
+$('btnCheck').onclick = checkProxies;
+$('btnExclude').onclick = excludeOthers;
+$('btnUndo').onclick = undoExclude;
+$('btnPreview').onclick = preview;
+$('btnCreate').onclick = createNow;
+$('btnOpen').onclick = () => doAction('open');
+$('btnStop').onclick = () => doAction('stop');
+$('btnDelete').onclick = () => doAction('delete');
+$('btnSelAll').onclick = () => { state.items.forEach(p => state.selected.add(p.id)); renderList(); };
+$('btnSelNone').onclick = () => { state.selected.clear(); renderList(); };
+$('chkAll').onchange = e => {
+  state.items.forEach(p => e.target.checked ? state.selected.add(p.id) : state.selected.delete(p.id));
+  renderList();
+};
+$('filter').oninput = renderList;
+$('perIp').onchange = parseNow;
+$('nameTpl').onchange = parseNow;
+$('expectCode').onchange = renderCheck;
+
+(async function boot() {
+  const cfg = await api('/api/config').catch(() => null);
+  if (cfg && cfg.antPort) $('antPort').value = cfg.antPort;
+  await health(cfg ? cfg.antPort : undefined);
+  if ($('accounts').value.trim()) parseNow();
+})();
+</script>
+</body>
+</html>
