@@ -30,7 +30,8 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+import traceback
+from datetime import datetime, timedelta, timezone
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -681,10 +682,6 @@ def build_fingerprint_args(seed, extra):
 # ------------------------------------------------------------------ 回收站
 # Ant 的删除是软删除（deleted_at），界面只能逐个「彻底删除」，72 小时才自动清。
 # 这里直接操作同一份 sqlite + 实例目录，复刻 PermanentlyDelete 的顺序。
-def _db_path():
-    return ANT_APP_DIR / "data" / "app.db"
-
-
 def _dir_size(path):
     total = 0
     if not path.exists():
@@ -707,102 +704,161 @@ def _human(n):
 
 
 def _resolve_dir(udd, pid, data_root):
-    p = Path(udd or pid)
-    target = p if p.is_absolute() else (data_root / (udd or pid))
-    try:
-        return target.resolve()
-    except OSError:
-        return data_root / (udd or pid)
+    return (data_root / (str(udd or "").strip() or pid)).resolve()
 
 
 def _alive_dirs(conn, data_root):
-    alive = set()
-    for r in conn.execute("select profile_id, user_data_dir from browser_profiles "
-                          "where deleted_at is null or deleted_at = ''"):
-        alive.add(_resolve_dir(r["user_data_dir"], r["profile_id"], data_root))
-    return alive
+    return {
+        _resolve_dir(r["user_data_dir"], r["profile_id"], data_root)
+        for r in conn.execute("select profile_id, user_data_dir from browser_profiles "
+                              "where deleted_at is null or deleted_at = ''")
+    }
 
 
-def trash_snapshot():
-    db = _db_path()
-    if not db.exists():
-        return {"ok": False, "error": "找不到数据库：%s（用 ANT_APP_DIR 指定 Ant 目录）" % db}
-    data_root = (ANT_APP_DIR / "data").resolve()
-    conn = sqlite3.connect(str(db), timeout=8)
+def _trash_rows(conn):
+    return conn.execute(
+        "select profile_id, profile_name, user_data_dir, deleted_at from browser_profiles "
+        "where deleted_at is not null and deleted_at <> '' order by deleted_at"
+    ).fetchall()
+
+
+def _trash_dirs(row, data_root):
+    pid = row["profile_id"]
+    snapshot = data_root / "snapshots" / pid
+    if snapshot.parent != data_root / "snapshots" or snapshot.resolve() != snapshot:
+        raise ValueError("快照目录异常：%s" % snapshot)
+    return (_resolve_dir(row["user_data_dir"], pid, data_root),
+            snapshot)
+
+
+def _trash_blocked(target, snap, data_root, alive):
+    if data_root not in target.parents:
+        return "实例目录必须位于 data 内，且不能是 data 本身"
+    snapshot_root = data_root / "snapshots"
+    if target == snapshot_root or snapshot_root in target.parents:
+        return "实例目录与快照存储目录重叠"
+    for path in alive:
+        if any(path == folder or folder in path.parents or path in folder.parents
+               for folder in (target, snap)):
+            return "目录与保留实例的数据目录重叠"
+    return ""
+
+
+def _trash_cutoff(keep_days):
+    return datetime.now(timezone.utc) - timedelta(days=keep_days) if keep_days else None
+
+
+def _older_than(deleted_at, cutoff):
+    if cutoff is None:
+        return True
+    try:
+        when = datetime.fromisoformat(deleted_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when < cutoff
+
+
+def _remove_trash_dir(path):
+    for attempt in range(3):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            if not path.exists():
+                return
+            if attempt == 2:
+                raise
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in (32, 33) or attempt == 2:
+                raise
+        time.sleep(0.15 * (attempt + 1))
+
+
+def _trash_error(exc):
+    detail = str(exc) or type(exc).__name__
+    if getattr(exc, "winerror", None) in (32, 33):
+        return "文件仍被占用。退出对应的 Chromium 进程后可重试。原始错误：" + detail
+    return detail
+
+
+def trash_snapshot(app_dir=None, keep_days=0):
+    app_dir = app_dir or ANT_APP_DIR
+    data_root = (app_dir / "data").resolve()
+    db = data_root / "app.db"
+    if not db.is_file():
+        return {"ok": False, "error": "找不到数据库：%s" % db}
+    cutoff = _trash_cutoff(keep_days)
+    conn = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=8)
     conn.row_factory = sqlite3.Row
     try:
         alive = _alive_dirs(conn, data_root)
-        rows = conn.execute(
-            "select profile_id, profile_name, user_data_dir, deleted_at from browser_profiles "
-            "where deleted_at is not null and deleted_at <> '' order by deleted_at"
-        ).fetchall()
         items, total = [], 0
-        for r in rows:
-            target = _resolve_dir(r["user_data_dir"], r["profile_id"], data_root)
-            snap = data_root / "snapshots" / r["profile_id"]
-            size = _dir_size(target) + _dir_size(snap)
-            inside = (data_root in target.parents) or target == data_root
-            busy = target in alive
+        for row in _trash_rows(conn):
+            if not _older_than(row["deleted_at"], cutoff):
+                continue
+            try:
+                target, snap = _trash_dirs(row, data_root)
+                blocked = _trash_blocked(target, snap, data_root, alive)
+                size = 0 if blocked else _dir_size(target) + _dir_size(snap)
+                dirname = target.name
+            except (OSError, RuntimeError, ValueError) as exc:
+                blocked, size, dirname = _trash_error(exc), 0, ""
             total += size
-            items.append({"id": r["profile_id"], "name": r["profile_name"] or "(未命名)",
-                          "deletedAt": r["deleted_at"][:19], "dir": target.name,
+            items.append({"id": row["profile_id"], "name": row["profile_name"] or "(未命名)",
+                          "deletedAt": row["deleted_at"][:19], "dir": dirname,
                           "bytes": size, "size": _human(size),
-                          "deletable": bool(inside and not busy),
-                          "blocked": "仍被存活实例占用" if busy else ("" if inside else "路径不在 data 下")})
+                          "deletable": not blocked, "blocked": blocked})
         return {"ok": True, "count": len(items), "bytes": total, "size": _human(total),
-                "items": items, "appDir": str(ANT_APP_DIR)}
+                "items": items, "appDir": str(app_dir)}
     finally:
         conn.close()
 
 
-def trash_purge(keep_days=0):
-    db = _db_path()
-    if not db.exists():
+def trash_purge(keep_days=0, app_dir=None):
+    data_root = ((app_dir or ANT_APP_DIR) / "data").resolve()
+    db = data_root / "app.db"
+    if not db.is_file():
         return {"ok": False, "error": "找不到数据库：%s" % db}
-    data_root = (ANT_APP_DIR / "data").resolve()
-    cutoff = ""
-    if keep_days and keep_days > 0:
-        cutoff = (datetime.now() - timedelta(days=float(keep_days))).strftime("%Y-%m-%dT%H:%M:%S")
-    conn = sqlite3.connect(str(db), timeout=8)
+    cutoff = _trash_cutoff(keep_days)
+    conn = sqlite3.connect(db.as_uri() + "?mode=rw", uri=True, timeout=8)
     conn.row_factory = sqlite3.Row
     deleted, failed, freed = [], [], 0
     try:
-        alive = _alive_dirs(conn, data_root)
-        rows = conn.execute(
-            "select profile_id, profile_name, user_data_dir, deleted_at from browser_profiles "
-            "where deleted_at is not null and deleted_at <> '' order by deleted_at"
-        ).fetchall()
-        for r in rows:
-            if cutoff and r["deleted_at"][:19] < cutoff:
+        tables = {r[0] for r in conn.execute("select name from sqlite_master where type = 'table'")}
+        for entry in _trash_rows(conn):
+            if not _older_than(entry["deleted_at"], cutoff):
                 continue
-            pid = r["profile_id"]
-            target = _resolve_dir(r["user_data_dir"], pid, data_root)
-            inside = (data_root in target.parents) or target == data_root
-            if target in alive or not inside or target == data_root:
-                failed.append({"name": r["profile_name"], "error": "目录受保护，已跳过"})
-                continue
-            size = _dir_size(target)
+            pid = entry["profile_id"]
+            name = entry["profile_name"] or pid
             try:
-                if target.exists():
-                    shutil.rmtree(target)
-                snap = data_root / "snapshots" / pid
-                if snap.exists():
-                    shutil.rmtree(snap, ignore_errors=True)
-                conn.execute("delete from launch_codes where profile_id = ?", (pid,))
-                conn.execute("delete from browser_profile_extension_settings where profile_id = ?", (pid,))
-                conn.execute("delete from browser_profile_extension_runtime where profile_id = ?", (pid,))
-                conn.execute("delete from browser_profiles where profile_id = ?", (pid,))
-                conn.commit()
+                with conn:
+                    # Block concurrent database writes while rechecking and removing this profile.
+                    conn.execute("begin immediate")
+                    row = conn.execute(
+                        "select profile_id, user_data_dir, deleted_at from browser_profiles where profile_id = ?",
+                        (pid,),
+                    ).fetchone()
+                    if not row or row["deleted_at"] != entry["deleted_at"]:
+                        continue
+                    target, snap = _trash_dirs(row, data_root)
+                    blocked = _trash_blocked(target, snap, data_root, _alive_dirs(conn, data_root))
+                    if blocked:
+                        failed.append({"name": name, "error": blocked})
+                        continue
+                    size = _dir_size(target) + _dir_size(snap)
+                    for table in ("launch_codes", "browser_profile_extension_settings",
+                                  "browser_profile_extensions", "browser_profile_extension_runtime"):
+                        if table in tables:
+                            conn.execute("delete from %s where profile_id = ?" % table, (pid,))
+                    conn.execute("delete from browser_profiles where profile_id = ?", (pid,))
+                    _remove_trash_dir(target)
+                    _remove_trash_dir(snap)
                 freed += size
-                deleted.append({"name": r["profile_name"], "size": _human(size)})
-            except Exception as exc:                        # noqa: BLE001
-                conn.rollback()
-                failed.append({"name": r["profile_name"], "error": str(exc)})
-        if deleted:
-            try:
-                conn.execute("vacuum")
-            except sqlite3.Error:
-                pass
+                deleted.append({"name": name, "size": _human(size)})
+            except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+                failed.append({"name": name, "error": _trash_error(exc)})
         return {"ok": True, "deleted": deleted, "failed": failed,
                 "freed": freed, "freedText": _human(freed)}
     finally:
@@ -880,11 +936,17 @@ def _run_login(profile, acct):
         r = subprocess.run(cmd, cwd=str(LOGIN_SCRIPT.parent), capture_output=True,
                            text=True, timeout=300, encoding="utf-8", errors="replace")
         ok = r.returncode == 0
+        lines = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
         tail = ""
-        for line in reversed((r.stdout or "").strip().splitlines()):
-            if line.strip():
-                tail = line.strip()
+        # 优先取「未完成登录：xxx」这类原因行；否则会被收尾提示「保留在打开状态」盖住
+        for ln in lines:
+            if ln.startswith(("未完成登录", "登录成功", "Ant API", "拿不到 debugPort")):
+                tail = ln
                 break
+        if not tail and lines:
+            tail = lines[-1]
+        if not ok and not tail:
+            tail = (r.stderr or "").strip()[-160:]
         _al_log(profile.get("name"), "ok" if ok else "fail", tail or (r.stderr or "")[-160:])
     except subprocess.TimeoutExpired:
         _al_log(profile.get("name"), "fail", "登录超时（>300s）")
@@ -1153,22 +1215,21 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, 200, auto_login_status())
 
         if path == "/api/trash/purge":
-            if not body.get("confirm"):
+            if body.get("confirm") is not True:
                 return json_response(self, 400, {"ok": False, "error": "需要 confirm=true"})
             try:
-                return json_response(self, 200, trash_purge(body.get("keepDays") or 0))
-            except BaseException as exc:                    # noqa: BLE001
-                # 一次删几百个文件时，某些环境的安全策略会中断删除（异常不一定继承 Exception，
-                # 有时 str(exc) 就是个数字），这里兜住，给一句人话而不是断连接。
-                msg = str(exc).strip()
-                if not msg or msg.isdigit() or "safe" in msg.lower() or "delete" in msg.lower():
-                    msg = "本机安全策略拦截了批量删除（一个实例目录通常几百个文件）"
-                return json_response(self, 200, {
-                    "ok": False,
-                    "error": "清理被中断：%s。\n解决办法：用命令行 "
-                             "`python purge-trash.py --app \"<Ant目录>\" --force`，"
-                             "或者自己双击 start-all.bat 启动（那个进程不受这层限制）。" % msg[:200],
-                })
+                keep_days = float(body.get("keepDays") or 0)
+                if keep_days < 0:
+                    raise ValueError
+                _trash_cutoff(keep_days)
+            except (TypeError, ValueError, OverflowError):
+                return json_response(self, 400, {"ok": False, "error": "keepDays 必须是有效的非负天数"})
+            try:
+                result = trash_purge(keep_days)
+            except Exception as exc:
+                traceback.print_exc()
+                return json_response(self, 500, {"ok": False, "error": "清理中断：" + _trash_error(exc)})
+            return json_response(self, 200, result)
 
         if path == "/api/action":
             action = (body.get("action") or "").strip()

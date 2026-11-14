@@ -484,14 +484,18 @@ async function doAction(action) {
 }
 
 // ---------- 打开即登录 ----------
+const AL_STATUS = { run: '登录中', ok: '登录成功', fail: '登录未完成', skip: '跳过', error: '出错' };
+
 async function refreshAutoLogin() {
   const d = await api('/api/auto-login');
   if (!d.ok) return;
   $('autoLogin').checked = !!d.enabled;
   const last = (d.log || []).find(x => x.status !== 'toggle');
-  $('autoLoginHint').textContent = d.accounts
-    ? `${d.accounts} 个账号${last ? ' · ' + last.time + ' ' + last.name + ' ' + last.status : ''}`
-    : 'accounts.json 还没有账号';
+  const head = d.accounts ? `${d.accounts} 个账号` : 'accounts.json 还没有账号';
+  if (!last || !d.accounts) { $('autoLoginHint').textContent = head; return; }
+  const st = AL_STATUS[last.status] || last.status;
+  const msg = last.msg ? String(last.msg).slice(0, 90) : '';
+  $('autoLoginHint').textContent = `${head} · ${last.time} ${last.name} ${st}${msg ? '：' + msg : ''}`;
 }
 
 async function toggleAutoLogin() {
@@ -503,10 +507,13 @@ async function toggleAutoLogin() {
 }
 
 // ---------- 回收站 ----------
-async function refreshTrash() {
+async function refreshTrash(reportError = false) {
   const data = await api('/api/trash');
   const pill = $('trashInfo'), btn = $('btnPurgeTrash');
-  if (!data.ok) { pill.style.display = 'none'; btn.style.display = 'none'; return; }
+  if (!data.ok) {
+    if (reportError) throw new Error(data.error || '无法读取回收站');
+    pill.style.display = 'none'; btn.style.display = 'none'; return;
+  }
   if (!data.count) {
     pill.style.display = 'none'; btn.style.display = 'none';
     state.trash = [];
@@ -526,23 +533,30 @@ async function purgeTrash() {
   if (!confirm(`彻底删除回收站里 ${n} 个实例？\n会删掉浏览器用户数据、快照、快捷码，不可恢复。\n（正在运行的实例不会被碰）`)) return;
   const btn = $('btnPurgeTrash');
   btn.disabled = true; btn.textContent = '清理中…';
+  setErr($('listErr'), '');
+  setWarn($('createWarn'), '');
   try {
     let data;
     try {
       data = await api('/api/trash/purge', { confirm: true });
     } catch (e) {
-      setErr($('listErr'), '清理请求中断：' + e.message + '\n如果提示要删的文件太多，改用命令行 purge-trash.py --force');
+      setErr($('listErr'), '清理请求中断：' + e.message);
       return;
     }
     if (!data.ok) { setErr($('listErr'), data.error || '清理失败'); return; }
     const fail = (data.failed || []).length;
-    setErr($('listErr'), fail ? '部分未清理：\n' + data.failed.slice(0, 6).map(f => `${f.name}：${f.error}`).join('\n') : '');
+    setErr($('listErr'), fail ? `${fail} 个实例未清理：\n` + data.failed.map(f => `${f.name}：${f.error}`).join('\n') : '');
     setWarn($('createWarn'), `已彻底删除 ${data.deleted.length} 个，释放 ${data.freedText}`
-      + (fail ? `，${fail} 个跳过` : ''));
-    await refreshList();
+      + (fail ? `，${fail} 个未清理` : ''));
   } finally {
-    btn.disabled = false;
-    await refreshTrash();
+    try {
+      await refreshTrash(true);
+    } catch (e) {
+      const err = $('listErr');
+      setErr(err, [err.textContent, '刷新回收站失败：' + e.message].filter(Boolean).join('\n'));
+    } finally {
+      btn.disabled = false;
+    }
   }
 }
 
