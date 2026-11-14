@@ -105,6 +105,9 @@ Xxx12883----R32HZLJPLA37Q7PN----CaseyKumlander2486@outlook.com
         </div>
         <span class="hint" id="acctSummary">—</span>
         <div class="spacer"></div>
+        <label class="switch" title="把 acct:邮箱----密码 写进实例标签，Ant 的自动化脚本能按启动码读到；标签在界面里可见">
+          <input type="checkbox" id="tagAccount" checked> 账号写进标签
+        </label>
         <button class="sm" id="btnParse">解析</button>
       </div>
     </section>
@@ -407,6 +410,7 @@ function params() {
     perIp: +$('perIp').value || 1, mode: $('mode').value, onShort: $('onShort').value,
     nameTemplate: $('nameTpl').value, direct: $('direct').checked,
     count: +$('count').value || 0,
+    tagAccount: $('tagAccount').checked,
   };
 }
 async function preview() {

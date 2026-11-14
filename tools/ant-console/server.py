@@ -843,12 +843,20 @@ def load_accounts():
 
 
 def find_account(name):
+    """按实例名找账号。兼容 `1-jdamfyqw`、`2-jdamfyqw` 这种带序号前缀的命名。"""
     name = (name or "").strip()
     accts = load_accounts()
+    if not name:
+        return None
     if name in accts:
         return accts[name]
+    # 去掉开头的 "序号-" / "序号_" 再匹配一次
+    stripped = re.sub(r"^\d+\s*[-_]\s*", "", name)
+    if stripped and stripped in accts:
+        return accts[stripped]
     for _, v in accts.items():
-        if v["email"].split("@")[0] == name:
+        local = v["email"].split("@")[0]
+        if local and local in (name, stripped):
             return v
     return None
 
@@ -907,6 +915,7 @@ def _auto_login_loop():
             _AL_SEEN[pid] = time.time()
             acct = find_account(name)
             if not acct:
+                _al_log(name, "skip", "accounts.json 里没有这个实例的账号")
                 continue
             _al_log(name, "run", "检测到实例启动，开始登录")
             threading.Thread(target=_run_login,
@@ -1106,12 +1115,17 @@ class Handler(BaseHTTPRequestHandler):
                 if seed_base:
                     digits = re.sub(r"\D", "", seed_base) or "7"
                     seed = (digits + str(100000 + i * 7919))[:12]
+                tags = [t for t in (body.get("tags") or []) if t]
+                # 把账号写进标签，Ant 的自动化脚本就能按启动码反查出来，不用手填参数。
+                # 注意：标签在 Ant 界面里可见，密码是明文的。
+                if acct.get("account") and acct.get("password") and body.get("tagAccount"):
+                    tags.append("acct:%s----%s" % (acct["account"], acct["password"]))
                 profile = {
                     "profileName": name,
                     "coreId": body.get("coreId") or CFG.get("core_id") or "default",
                     "fingerprintArgs": build_fingerprint_args(seed, extra_fp),
                     "launchArgs": launch_args,
-                    "tags": [t for t in (body.get("tags") or []) if t],
+                    "tags": tags,
                     "proxyConfig": proxy_cfg,
                 }
                 # 只传新旧版本都认的字段：安装版（1.8/1.9.0）的 ProfileInput 没有

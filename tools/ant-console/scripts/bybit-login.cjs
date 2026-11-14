@@ -12,6 +12,48 @@ const LOGIN_URL = 'https://www.bybitglobal.com/zh-MY/login'
   + '?source=homepage&page_section=regularbanner&button_name=signup&abtest=undefined&regPhone=';
 const AFTER_URL = 'https://www.bybitglobal.com/zh-MY/cards/';
 
+const http = require('http');
+
+function getJSON(url, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      let buf = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { buf += c; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(buf)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * 从实例标签里读账号：控制台建实例时写了 tag = "acct:邮箱----密码"。
+ * 脚本只能拿到启动码（api.selector.code），所以按启动码去 /api/profiles 反查。
+ */
+async function accountFromTag(selector, log) {
+  try {
+    const port = String(process.env.ANT_PORT || 19876);
+    const data = await getJSON('http://127.0.0.1:' + port + '/api/profiles');
+    const items = (data && data.items) || [];
+    const code = selector && (selector.code || selector.launchCode);
+    if (!code) return null;
+    const me = items.find((p) => p.launchCode === code);
+    if (!me) return null;
+    const tag = (me.tags || []).find((t) => typeof t === 'string' && t.indexOf('acct:') === 0);
+    if (!tag) return null;
+    const raw = tag.slice(5);
+    const sep = raw.indexOf('----');
+    if (sep < 0) return { email: raw, password: '' };
+    return { email: raw.slice(0, sep), password: raw.slice(sep + 4) };
+  } catch (e) {
+    if (log) log('读实例标签失败：' + (e && e.message));
+    return null;
+  }
+}
+
 async function clickByText(page, text) {
   const byRole = page.getByRole('button', { name: text });
   if (await byRole.count().catch(() => 0)) {
@@ -28,12 +70,25 @@ async function clickByText(page, text) {
 
 module.exports = {
   async run(api) {
-    const { useBrowser, params, log } = api;
+    const { useBrowser, params, log, selector } = api;
     const p = params || {};
-    const email = String(p.email || '').trim();
-    const password = String(p.password || '');
+    let email = String(p.email || '').trim();
+    let password = String(p.password || '');
     if (!email || !password) {
-      return { ok: false, summary: '运行参数里要填 {"email":"...","password":"..."}' };
+      // 参数没填就从实例标签里取（控制台建实例时写进去的 acct:邮箱----密码）
+      const fromTag = await accountFromTag(selector, log);
+      if (fromTag && fromTag.email && fromTag.password) {
+        email = fromTag.email;
+        password = fromTag.password;
+        log('账号取自带签：' + email);
+      }
+    }
+    if (!email || !password) {
+      return {
+        ok: false,
+        summary: '参数里没有账号，实例标签里也没有。要么填 {"email","password"}，'
+          + '要么建实例时勾上「账号写进标签」',
+      };
     }
 
     const { page } = await useBrowser({

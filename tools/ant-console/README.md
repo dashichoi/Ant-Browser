@@ -133,8 +133,22 @@ macOS 双击 `start.command`，Windows 双击 `start.bat`。
 3. 运行，看日志和截图
 
 入口是 `module.exports.run(api)`，`api` 里有 `useBrowser()`（拿到 Playwright 的 page）、
-`params`、`log`。相比命令行版，好处是有运行记录和截图；坏处是要装 Ant 的 Node/Playwright
+`params`、`log`、`selector`。相比命令行版，好处是有运行记录和截图；坏处是要装 Ant 的 Node/Playwright
 运行时，且**必须手动点运行**（Ant 没有「启动时自动触发」的钩子）。
+
+### 让脚本自己拿到账号
+
+Ant 的实例**不存账号密码**，脚本的 `params` 也不会从实例继承（payload 里只有启动码）。
+所以加了一条桥：建实例时勾选「账号写进标签」，会往实例标签写一条
+
+```
+acct:邮箱----密码
+```
+
+脚本运行时如果 `params` 里没填，就按 `api.selector.code`（启动码）去 `/api/profiles`
+反查这条标签，自动取账号。
+
+注意：**标签在 Ant 界面里是明文可见的**。不想暴露就取消勾选，改用手动填参数。
 
 
 ## 时区
