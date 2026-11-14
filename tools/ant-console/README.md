@@ -102,6 +102,41 @@ macOS 双击 `start.command`，Windows 双击 `start.bat`。
 | `/api/action stop` | `POST /api/profiles/{id}/stop` |
 | `/api/action delete` | `DELETE /api/profiles/{id}` |
 
+## 打开即登录（可选）
+
+实例一打开就自动跑登录脚本，不用手动点。开关在实例区右上角「打开即登录」，默认开。
+
+账号写在 `accounts.json`（同目录，**已被 gitignore，不会进仓库**）：
+
+```json
+{
+  "jdamfyqw": { "email": "jdamfyqw@uigmail.jp", "password": "8vtNKz20n8ci" }
+}
+```
+
+也可以写成 `"jdamfyqw": "邮箱----密码"`。key 是实例名，也支持用邮箱 `@` 前那段匹配。
+
+机制：后台线程每 2 秒查一次实例状态，发现「已停止 → 运行中」就找对应账号，调
+`bybit_login.py --keep-open` 登录，结果写在开关旁边的提示和 `/api/auto-login` 的 log 里。
+
+- 关掉开关 → 只打开浏览器，不登录
+- 启动时想默认关：`AUTO_LOGIN=0`
+- 账号文件换位置：`ANT_ACCOUNTS=路径`
+- 登录脚本换位置：`BYBIT_LOGIN_SCRIPT=路径`
+
+## Ant 自动化脚本（另一种跑法）
+
+`scripts/bybit-login.cjs` 是同一套逻辑的 Playwright 版，走 Ant 自带的脚本运行时：
+
+1. Ant → 自动化脚本 → 导入本地文件 → 选 `scripts/bybit-login.cjs`
+2. 选中一个实例，运行参数填 `{"email":"...","password":"..."}`
+3. 运行，看日志和截图
+
+入口是 `module.exports.run(api)`，`api` 里有 `useBrowser()`（拿到 Playwright 的 page）、
+`params`、`log`。相比命令行版，好处是有运行记录和截图；坏处是要装 Ant 的 Node/Playwright
+运行时，且**必须手动点运行**（Ant 没有「启动时自动触发」的钩子）。
+
+
 ## 时区
 
 建实例时填的「时区」会写成 `--timezone=<IANA>` 追加到 `fingerprintArgs`，一次启动就固定，不需要常驻进程。

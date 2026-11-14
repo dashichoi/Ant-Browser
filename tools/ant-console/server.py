@@ -26,6 +26,7 @@ import socket
 import sqlite3
 import ssl
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -808,6 +809,117 @@ def trash_purge(keep_days=0):
         conn.close()
 
 
+# ------------------------------------------------------------------ 打开即登录
+# 守护线程轮询实例状态，发现「已停止 → 运行中」就按 accounts.json 里的账号自动登录。
+# 开关键可以一键关掉（界面上有；也可以用 AUTO_LOGIN=0 启动）。
+AUTO_LOGIN = {
+    "enabled": os.environ.get("AUTO_LOGIN", "1").lower() not in ("0", "false", "off"),
+    "log": [],
+}
+ACCOUNTS_FILE = Path(os.environ.get("ANT_ACCOUNTS") or (ROOT / "accounts.json"))
+LOGIN_SCRIPT = Path(os.environ.get("BYBIT_LOGIN_SCRIPT")
+                    or "C:/Cdoe/github/bybit-auto-register/bybit_login.py")
+_AL_SEEN = {}
+_AL_LOCK = threading.Lock()
+
+
+def load_accounts():
+    """accounts.json：{"实例名": {"email": "...", "password": "..."}} 或 "邮箱----密码"。"""
+    path = ACCOUNTS_FILE
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:                                      # noqa: BLE001
+        return {}
+    out = {}
+    for k, v in (raw or {}).items():
+        if isinstance(v, str):
+            parts = v.split("----")
+            out[k] = {"email": parts[0].strip(), "password": parts[1].strip() if len(parts) > 1 else ""}
+        elif isinstance(v, dict):
+            out[k] = {"email": (v.get("email") or "").strip(), "password": (v.get("password") or "")}
+    return {k: v for k, v in out.items() if v["email"]}
+
+
+def find_account(name):
+    name = (name or "").strip()
+    accts = load_accounts()
+    if name in accts:
+        return accts[name]
+    for _, v in accts.items():
+        if v["email"].split("@")[0] == name:
+            return v
+    return None
+
+
+def _al_log(name, status, msg):
+    with _AL_LOCK:
+        AUTO_LOGIN["log"].insert(0, {"time": time.strftime("%H:%M:%S"), "name": name,
+                                     "status": status, "msg": msg[:200]})
+        del AUTO_LOGIN["log"][30:]
+
+
+def _run_login(profile, acct):
+    if not LOGIN_SCRIPT.exists():
+        _al_log(profile.get("name"), "error", "找不到登录脚本：%s" % LOGIN_SCRIPT)
+        return
+    cmd = [sys.executable, str(LOGIN_SCRIPT),
+           "--email", acct["email"], "--password", acct["password"],
+           "--name", profile.get("name") or acct["email"].split("@")[0],
+           "--keep-open"]
+    try:
+        r = subprocess.run(cmd, cwd=str(LOGIN_SCRIPT.parent), capture_output=True,
+                           text=True, timeout=300, encoding="utf-8", errors="replace")
+        ok = r.returncode == 0
+        tail = ""
+        for line in reversed((r.stdout or "").strip().splitlines()):
+            if line.strip():
+                tail = line.strip()
+                break
+        _al_log(profile.get("name"), "ok" if ok else "fail", tail or (r.stderr or "")[-160:])
+    except subprocess.TimeoutExpired:
+        _al_log(profile.get("name"), "fail", "登录超时（>300s）")
+    except Exception as exc:                                # noqa: BLE001
+        _al_log(profile.get("name"), "error", str(exc)[:160])
+
+
+def _auto_login_loop():
+    while True:
+        time.sleep(2)
+        if not AUTO_LOGIN["enabled"]:
+            continue
+        try:
+            data = ant_list_profiles()
+            items = data if isinstance(data, list) else ((data or {}).get("items") or [])
+        except Exception:                                   # noqa: BLE001
+            continue
+        for p in items:
+            pid = p.get("id") or p.get("profileId")          # 原始 API 用 profileId
+            name = p.get("name") or p.get("profileName") or ""
+            if not pid:
+                continue
+            if not p.get("running"):
+                _AL_SEEN.pop(pid, None)
+                continue
+            if pid in _AL_SEEN:
+                continue
+            _AL_SEEN[pid] = time.time()
+            acct = find_account(name)
+            if not acct:
+                continue
+            _al_log(name, "run", "检测到实例启动，开始登录")
+            threading.Thread(target=_run_login,
+                             args=({"name": name, "id": pid}, acct), daemon=True).start()
+
+
+def auto_login_status():
+    accts = load_accounts()
+    return {"ok": True, "enabled": AUTO_LOGIN["enabled"],
+            "accounts": len(accts), "names": sorted(accts.keys())[:20],
+            "accountsFile": str(ACCOUNTS_FILE), "log": AUTO_LOGIN["log"]}
+
+
 # ------------------------------------------------------------------ HTTP 服务
 def json_response(handler, code, payload):
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -880,6 +992,8 @@ class Handler(BaseHTTPRequestHandler):
                 return json_response(self, 200, trash_snapshot())
             except Exception as exc:                        # noqa: BLE001
                 return json_response(self, 200, {"ok": False, "error": str(exc)})
+        if path == "/api/auto-login":
+            return json_response(self, 200, auto_login_status())
         if path == "/api/config":
             return json_response(self, 200, {"ok": True, "antPort": ANT_PORT,
                                              "localPort": LOCAL_PORT,
@@ -1019,6 +1133,11 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, 200, {"ok": True, "created": created,
                                              "failed": failed, "warnings": warn})
 
+        if path == "/api/auto-login":
+            AUTO_LOGIN["enabled"] = bool(body.get("enabled"))
+            _al_log("-", "toggle", "开关已%s" % ("打开" if AUTO_LOGIN["enabled"] else "关闭"))
+            return json_response(self, 200, auto_login_status())
+
         if path == "/api/trash/purge":
             if not body.get("confirm"):
                 return json_response(self, 400, {"ok": False, "error": "需要 confirm=true"})
@@ -1084,7 +1203,9 @@ def main():
         except ValueError:
             pass
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    threading.Thread(target=_auto_login_loop, daemon=True).start()
     print("Ant 控制台: http://127.0.0.1:%d" % port)
+    print("打开即登录: %s（账号文件 %s）" % ("开" if AUTO_LOGIN["enabled"] else "关", ACCOUNTS_FILE))
     print("Ant API : %s（来自 %s）" % (ant_base(), CFG.get("source") or "默认值"))
     if not CFG.get("source"):
         print("提示：没找到 Ant-Browser/config.yaml，端口用默认 19900；界面里可以改。")

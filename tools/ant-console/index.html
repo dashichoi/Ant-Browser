@@ -47,8 +47,7 @@
   button:disabled{opacity:.45;cursor:not-allowed}
   button.sm{padding:3px 9px;font-size:12px}
   .hint{font-size:12px;color:var(--dim)}
-  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 9px;
-        border-radius:999px;background:var(--chip);color:#3730a3;border:1px solid #dfe4ff}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 9px;        border-radius:999px;background:var(--chip);color:#3730a3;border:1px solid #dfe4ff}
   .pill.ok{background:#eafaf2;color:var(--ok);border-color:#c7ecda}
   .pill.warn{background:#fff7e6;color:var(--warn);border-color:#f3e0b5}
   .pill.bad{background:#fdf0ee;color:var(--bad);border-color:#f3d2cd}
@@ -69,6 +68,9 @@
   .spacer{flex:1}
   .kbd{font-size:11px;color:var(--dim)}
   code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
+  .switch{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--dim);
+    padding:2px 8px;border:1px solid var(--line);border-radius:999px;cursor:pointer;user-select:none}
+  .switch input{width:13px;height:13px;cursor:pointer;accent-color:#4f46e5}
 </style>
 </head>
 <body>
@@ -183,6 +185,10 @@ http://1.2.3.4:3128:user:pass
       <button class="sm" id="btnStop">停止选中</button>
       <button class="sm danger" id="btnDelete">删除选中</button>
       <div class="spacer"></div>
+      <label class="switch" title="实例一打开就按 accounts.json 自动登录；关掉就不执行">
+        <input type="checkbox" id="autoLogin"> 打开即登录
+      </label>
+      <span class="hint" id="autoLoginHint"></span>
       <span class="pill" id="trashInfo" style="display:none">回收站 —</span>
       <button class="sm danger" id="btnPurgeTrash" style="display:none">清空回收站</button>
       <input type="text" id="filter" placeholder="按名称 / 代理过滤" style="width:200px">
@@ -473,6 +479,25 @@ async function doAction(action) {
   await refreshList();
 }
 
+// ---------- 打开即登录 ----------
+async function refreshAutoLogin() {
+  const d = await api('/api/auto-login');
+  if (!d.ok) return;
+  $('autoLogin').checked = !!d.enabled;
+  const last = (d.log || []).find(x => x.status !== 'toggle');
+  $('autoLoginHint').textContent = d.accounts
+    ? `${d.accounts} 个账号${last ? ' · ' + last.time + ' ' + last.name + ' ' + last.status : ''}`
+    : 'accounts.json 还没有账号';
+}
+
+async function toggleAutoLogin() {
+  const on = $('autoLogin').checked;
+  const d = await api('/api/auto-login', { enabled: on });
+  if (!d.ok) { $('autoLogin').checked = !on; return; }
+  $('autoLoginHint').textContent = on ? '已开启，实例启动后自动登录' : '已关闭，实例启动不再自动登录';
+  if (on) setTimeout(refreshAutoLogin, 2500);
+}
+
 // ---------- 回收站 ----------
 async function refreshTrash() {
   const data = await api('/api/trash');
@@ -531,6 +556,8 @@ $('btnStop').onclick = () => doAction('stop');
 $('btnDelete').onclick = () => doAction('delete');
 $('btnSelAll').onclick = () => { state.items.forEach(p => state.selected.add(p.id)); renderList(); };
 $('btnPurgeTrash').onclick = purgeTrash;
+$('autoLogin').onchange = toggleAutoLogin;
+setInterval(refreshAutoLogin, 15000);
 $('btnSelNone').onclick = () => { state.selected.clear(); renderList(); };
 $('chkAll').onchange = e => {
   state.items.forEach(p => e.target.checked ? state.selected.add(p.id) : state.selected.delete(p.id));
@@ -547,6 +574,7 @@ $('expectCode').onchange = renderCheck;
   if (cfg && cfg.antPort) $('antPort').value = cfg.antPort;
   await health(cfg ? cfg.antPort : undefined);
   refreshTrash();
+  refreshAutoLogin();
   if ($('accounts').value.trim()) parseNow();
 })();
 </script>

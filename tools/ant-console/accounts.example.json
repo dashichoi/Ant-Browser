@@ -1,0 +1,7 @@
+{
+  "实例名或邮箱前缀": {
+    "email": "user@example.com",
+    "password": "your-password"
+  },
+  "也可以写成一行字符串": "user2@example.com----password2"
+}
