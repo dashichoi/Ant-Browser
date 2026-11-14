@@ -1025,13 +1025,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 return json_response(self, 200, trash_purge(body.get("keepDays") or 0))
             except BaseException as exc:                    # noqa: BLE001
-                # 一次删几百个文件时，某些环境的安全策略会中断删除（异常不一定继承 Exception），
-                # 这里兜住，至少让前端拿到一句话而不是断连接。
-                msg = str(exc) or exc.__class__.__name__
+                # 一次删几百个文件时，某些环境的安全策略会中断删除（异常不一定继承 Exception，
+                # 有时 str(exc) 就是个数字），这里兜住，给一句人话而不是断连接。
+                msg = str(exc).strip()
+                if not msg or msg.isdigit() or "safe" in msg.lower() or "delete" in msg.lower():
+                    msg = "本机安全策略拦截了批量删除（一个实例目录通常几百个文件）"
                 return json_response(self, 200, {
                     "ok": False,
-                    "error": "清理被中断：%s。如果提示要删的文件太多，改用命令行 "
-                             "`python purge-trash.py --app \"<Ant目录>\" --force`。" % msg[:200],
+                    "error": "清理被中断：%s。\n解决办法：用命令行 "
+                             "`python purge-trash.py --app \"<Ant目录>\" --force`，"
+                             "或者自己双击 start-all.bat 启动（那个进程不受这层限制）。" % msg[:200],
                 })
 
         if path == "/api/action":
