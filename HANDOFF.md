@@ -3,6 +3,14 @@
 > 给另一台机器（含 macOS）clone 本仓库后接手用。记录当前进度、跑起来要什么、以及和 Windows 开发机的差异。
 > 最后更新：2026-11-14 · 版本 `1.9.3`
 
+## 0. 先看这条：clone 哪个仓库
+
+本机最新代码在 **`dashichoi/Ant-Browser`**。`README.md` 和 badge 里写的 `black-ant/Ant-Browser` 是上游原仓库，最新提交停在 `chore(release): 发布 1.9.3`，比本机少 18 个提交（ant-console 全部工作 + 本次 macOS 修复都不在里面）。
+
+```bash
+git clone https://github.com/dashichoi/Ant-Browser.git
+```
+
 ## 1. 仓库现状
 
 - 分支：`master`，与 `origin` 同步。
@@ -25,7 +33,18 @@
 
 ## 3. macOS 首次上手
 
-### 依赖
+### 最快路径：云端构建 .app（不用本地装 Go/Wails）
+
+在 GitHub 仓库页面 **Actions → Publish macOS Packages → Run workflow**，选 `arm64` 或 `amd64`。跑完后在该次运行的 Artifacts 里下载 zip，解压即用：
+
+```bash
+xattr -dr com.apple.quarantine "AntBrowser-<version>-macos-<arch>.app"
+open "AntBrowser-<version>-macos-<arch>.app"
+```
+
+本机无源码改动时优先走这条；要改代码再走下面的源码方式。
+
+### 依赖（源码方式）
 
 ```bash
 xcode-select --install          # 编译 Wails 需要
