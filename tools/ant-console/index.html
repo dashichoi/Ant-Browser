@@ -239,8 +239,11 @@ async function refreshList(retry = 2) {
   }
   setErr($('listErr'), '');
   state.items = data.items || [];
-  // Ant 返回的是「最新在前」，这里按创建时间正序排，和账号/序号顺序对齐
-  state.items.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+  // Ant 返回的是「最新在前」，这里按创建时间正序排；同一秒建的多半没顺序，退化成按名字排
+  state.items.sort((a, b) => {
+    const byTime = String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+    return byTime !== 0 ? byTime : String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
+  });
   $('profileCount').textContent = '实例 ' + state.items.length;
   $('listTag').textContent = state.items.length;
   renderList();
