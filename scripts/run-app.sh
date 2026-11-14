@@ -10,9 +10,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT_DIR/build/bin/ant-chrome"
-PORT=19876
+# 端口以 config.yaml 的 launch_server.port 为准（项目版默认 19900）
+PORT="$(grep -A5 '^launch_server:' "$ROOT_DIR/config.yaml" 2>/dev/null | sed -n 's/^[[:space:]]*port:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)"
+PORT="${PORT:-19900}"
 LOCK="$ROOT_DIR/app-instance.lock"
-# 安装版（旧构建）把根目录落在 XDG 数据目录，锁文件在这里
+# 安装版（旧构建）把根目录落在 XDG 数据目录，锁文件在这里；非 Linux 上通常不存在
 XDG_LOCK="/data/antblack/app-data/ant-browser/app-instance.lock"
 
 MODE="start"
@@ -26,17 +28,37 @@ case "${1:-}" in
   *) echo "未知参数：$1（可用 --check / --restart）" >&2; exit 2 ;;
 esac
 
-port_busy() { ss -ltn 2>/dev/null | awk -v p=":$PORT" 'NR>1 && $4 ~ p"$" {f=1} END{exit !f}'; }
+port_busy() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk -v p=":$PORT" 'NR>1 && $4 ~ p"$" {f=1} END{exit !f}'
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$PORT") >/dev/null 2>&1 || return 1
+    exec 3<&- 3>&-
+    return 0
+  fi
+}
 lock_pid() { sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$1" 2>/dev/null | head -1; }
+
+# GNU stat 与 BSD/macOS stat 参数不同，统一封装
+file_mtime() {
+  if stat -c %y "$1" >/dev/null 2>&1; then
+    stat -c %y "$1" | cut -d. -f1
+  else
+    stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$1" 2>/dev/null
+  fi
+}
+file_size() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
 
 show_state() {
   echo "项目根    : $ROOT_DIR"
   if [[ -x "$BIN" ]]; then
-    echo "可执行    : $BIN（构建于 $(stat -c %y "$BIN" | cut -d. -f1)）"
+    echo "可执行    : $BIN（构建于 $(file_mtime "$BIN")）"
   else
-    echo "可执行    : [缺失] 先执行 wails build -s -skipbindings -tags webkit2_41 -o ant-chrome"
+    echo "可执行    : [缺失] 先执行 wails build -s -skipbindings -o ant-chrome"
   fi
-  echo "数据库    : $ROOT_DIR/data/app.db（$(stat -c %s "$ROOT_DIR/data/app.db" 2>/dev/null || echo 0) 字节）"
+  echo "数据库    : $ROOT_DIR/data/app.db（$(file_size "$ROOT_DIR/data/app.db") 字节）"
   if port_busy; then echo "端口 $PORT : 被占用"; else echo "端口 $PORT : 空闲"; fi
   if [[ -f "$LOCK" ]]; then
     echo "项目版进程: $(cat "$LOCK")"
@@ -49,7 +71,7 @@ show_state() {
   if port_busy; then
     local n
     n="$(curl -s -m 5 "http://127.0.0.1:$PORT/api/profiles" 2>/dev/null | sed -n 's/.*"count":\([0-9]*\).*/\1/p' | head -1)"
-    [[ -n "${n:-}" ]] && echo "接口实例数: $n（37=项目版 / 110=安装版）"
+    if [[ -n "${n:-}" ]]; then echo "接口实例数: $n（37=项目版 / 110=安装版）"; fi
   fi
 }
 
@@ -130,12 +152,18 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 cd "$ROOT_DIR"
+mkdir -p "$ROOT_DIR/data/logs"
 echo "启动：$BIN（工作目录 $ROOT_DIR → appRoot 取当前目录，数据 data/app.db）"
-setsid nohup "$BIN" >"$ROOT_DIR/data/logs/dev-stdout.log" 2>&1 &
+# macOS 没有 setsid，直接 nohup 后台启动即可
+if command -v setsid >/dev/null 2>&1; then
+  setsid nohup "$BIN" >"$ROOT_DIR/data/logs/dev-stdout.log" 2>&1 &
+else
+  nohup "$BIN" >"$ROOT_DIR/data/logs/dev-stdout.log" 2>&1 &
+fi
 disown 2>/dev/null || true
 
 for _ in $(seq 1 20); do
-  [[ -f "$LOCK" ]] && break
+  if [[ -f "$LOCK" ]]; then break; fi
   sleep 0.5
 done
 sleep 1

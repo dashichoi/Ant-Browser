@@ -25,17 +25,24 @@ require_cmd() {
   fi
 }
 
+# 端口占用检测：Linux 用 ss，macOS 用 lsof，都没有时退回 bash /dev/tcp
 is_tcp_port_busy() {
   local port="$1"
-  ss -ltn "( sport = :$port )" | tail -n +2 | grep -q .
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "( sport = :$port )" 2>/dev/null | tail -n +2 | grep -q .
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1 || return 1
+    exec 3<&- 3>&-
+    return 0
+  fi
 }
 
 resolve_wails_devserver() {
   local start_port="${WAILS_DEVSERVER_PORT:-34115}"
   local host="${WAILS_DEVSERVER_HOST:-127.0.0.1}"
   local port="$start_port"
-
-  require_cmd ss
 
   while is_tcp_port_busy "$port"; do
     port=$((port + 1))
@@ -45,9 +52,11 @@ resolve_wails_devserver() {
   export WAILS_DEVSERVER_ADDRESS
 }
 
+# 仅 Linux 需要 webkit2gtk 相关 tag；macOS 使用系统 WKWebView，没有 pkg-config
 detect_wails_build_tags() {
   WAILS_BUILD_TAGS=()
-  if require_cmd pkg-config && ! pkg-config --exists webkit2gtk-4.0 && pkg-config --exists webkit2gtk-4.1; then
+  command -v pkg-config >/dev/null 2>&1 || return 0
+  if ! pkg-config --exists webkit2gtk-4.0 && pkg-config --exists webkit2gtk-4.1; then
     echo "Detected webkit2gtk-4.1 only, enabling Wails tag: webkit2_41"
     WAILS_BUILD_TAGS=(-tags webkit2_41)
   fi
