@@ -76,11 +76,34 @@ macOS 双击 `start.command`，Windows 双击 `start.bat`。
 | `/api/action stop` | `POST /api/profiles/{id}/stop` |
 | `/api/action delete` | `DELETE /api/profiles/{id}` |
 
+## 时区
+
+建实例时填的「时区」会写成 `--timezone=<IANA>` 追加到 `fingerprintArgs`，一次启动就固定，不需要常驻进程。
+
+**前提是内核版本够新。** 实测：
+
+| 内核 | `--timezone` | 说明 |
+|---|---|---|
+| fingerprint-chromium **150** | ✅ 两条路径都对 | `Intl...timeZone` = `Australia/Sydney`，`Date.getTimezoneOffset()` = `-660` |
+| fingerprint-chromium **135** | ❌ 完全无效 | 只能退回 CDP `Emulation.setTimezoneOverride`（断开即回滚） |
+
+135 这类老内核的兜底方案仍在 `bybit-auto-register/ant_batch.py` 的 `tz --watch` 里。
+
+## 部署内核
+
+`chrome/<任意名字>/` 下只要存在 `chrome.exe`，Ant 启动时会自动扫描并注册（`FindCoreExecutable` 递归查找）。
+
+```bash
+# 例：fingerprint-chromium 150
+unzip ungoogled-chromium_150.0.7871.186-1.1_windows_x64.zip -d chrome/chrom-150
+# 确认 chrome/chrom-150/chrome.exe 存在，重启 Ant 即可
+```
+
+安装版在 `C:\Program Files\` 下时整棵树不可写（连 `data/` 都锁），内核放不进去。两个办法：
+用管理员身份启动 Ant，或把整个安装目录复制到可写位置再跑（105MB，不带内核）。
+
 ## 已知限制
 
-- **时区不在这里处理。** Ant 内核的 `--timezone` 在部分内核版本上实测无效，仍需
-  CDP `Emulation.setTimezoneOverride` 注入（且断开即失效）。这部分留在
-  `bybit-auto-register/ant_batch.py` 的 `tz --watch` 里。
 - 代理检测走的是代理自己的出口，超时 12 秒；死代理会拖慢整批（并发 8，最坏 12 秒/8 条）。
 - 没做登录流程：只建实例和开关窗口，登录仍在人/脚本那一侧。
 - 批量创建是串行的，几百个实例会慢，属预期。

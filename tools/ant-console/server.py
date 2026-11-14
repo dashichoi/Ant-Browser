@@ -739,7 +739,13 @@ class Handler(BaseHTTPRequestHandler):
             if aerr or perr:
                 return json_response(self, 400, {"ok": False, "errors": perr + aerr})
             seed_base = str(body.get("seedBase") or "").strip()
-            extra_fp = body.get("extraFingerprintArgs") or []
+            extra_fp = list(body.get("extraFingerprintArgs") or [])
+            tz = str(body.get("timezone") or "").strip()
+            if tz:
+                # 内核 ≥142 的 --fingerprint-chromium 补丁里 --timezone 直接生效，两条读取路径都对
+                # （Intl.DateTimeFormat().resolvedOptions().timeZone 与 Date.getTimezoneOffset）。
+                # 135 及更早实测无效，那种情况只能退回 CDP Emulation.setTimezoneOverride。
+                extra_fp.append("--timezone=" + tz)
             launch_args = body.get("launchArgs") or []
             auto_open = bool(body.get("autoOpen"))
             created, failed = [], []
@@ -759,12 +765,11 @@ class Handler(BaseHTTPRequestHandler):
                     "fingerprintArgs": build_fingerprint_args(seed, extra_fp),
                     "launchArgs": launch_args,
                     "tags": [t for t in (body.get("tags") or []) if t],
-                    "keywords": [],
-                    "proxyMode": proxy_mode,
                     "proxyConfig": proxy_cfg,
                 }
-                if body.get("groupId"):
-                    profile["groupId"] = body["groupId"]
+                # 只传新旧版本都认的字段：安装版（1.8/1.9.0）的 ProfileInput 没有
+                # proxyMode / keywords / groupId，多了会被 DisallowUnknownFields 打成 400。
+                # 不传 proxyMode 时后端按「proxyConfig 非空 → local」自行推断。
                 try:
                     res = ant_create_profile(profile, auto_launch=False)
                     pid = res.get("profileId") or (res.get("profile") or {}).get("profileId")

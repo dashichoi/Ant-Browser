@@ -143,6 +143,7 @@ http://1.2.3.4:3128:user:pass
         <select id="onShort"><option value="reuse">循环复用</option><option value="error">直接报错</option></select>
       </div>
       <div class="fld"><label>实例名模板</label><input type="text" id="nameTpl" value="{u}" style="width:120px"></div>
+      <div class="fld"><label>时区</label><input type="text" id="timezone" value="Australia/Sydney" style="width:150px"></div>
       <div class="fld"><label>指纹种子前缀</label><input type="text" id="seedBase" value="7" style="width:90px"></div>
       <div class="fld"><label>标签</label><input type="text" id="tags" value="bybit" style="width:110px"></div>
       <label class="hint" style="display:flex;align-items:center;gap:6px;margin-top:16px">
@@ -401,6 +402,7 @@ async function createNow() {
     const data = await api('/api/create', {
       ...params(),
       seedBase: $('seedBase').value,
+      timezone: $('timezone').value,
       tags: $('tags').value.split(/[,，\s]+/).filter(Boolean),
       autoOpen: $('autoOpen').checked,
     });
