@@ -207,9 +207,9 @@ function setWarn(el, text) {
   el.style.display = 'block'; el.textContent = text;
 }
 async function api(path, body) {
-  const opt = body === undefined ? {} : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-  };
+  const opt = body === undefined
+    ? { cache: 'no-store' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' };
   const res = await fetch(path, opt);
   const data = await res.json().catch(() => ({ ok: false, error: '返回不是 JSON' }));
   return data;
@@ -229,9 +229,13 @@ async function health(port) {
   else if (data.error) setErr($('listErr'), data.error);
   return data;
 }
-async function refreshList() {
+async function refreshList(retry = 2) {
   const data = await api('/api/list');
-  if (!data.ok) { setErr($('listErr'), data.error || '拉取失败'); return; }
+  if (!data.ok) {
+    // Ant 那边刚写完 DB 时偶尔会短暂失败/返回旧快照，等一下再拉
+    if (retry > 0) { await new Promise(r => setTimeout(r, 400)); return refreshList(retry - 1); }
+    setErr($('listErr'), data.error || '拉取失败'); return;
+  }
   setErr($('listErr'), '');
   state.items = data.items || [];
   $('profileCount').textContent = '实例 ' + state.items.length;
@@ -413,7 +417,26 @@ async function createNow() {
       ...(data.warnings || []),
       ...(data.failed || []).map(f => `✗ ${f.name}：${f.error}`),
     ].join('\n'));
+    // 先用创建结果把新实例插到列表顶部，不等下一次拉取：建完就能看见
+    const made = data.created || [];
+    if (made.length) {
+      const now = new Date().toISOString();
+      const fresh = made.map(c => ({
+        id: c.id, name: c.name, running: false, debugPort: 0,
+        proxyConfig: c.proxy === '直连' ? 'direct://' : c.proxy,
+        launchCode: '', tags: [], createdAt: now,
+      }));
+      const ids = new Set(fresh.map(f => f.id));
+      state.items = [...fresh, ...state.items.filter(p => !ids.has(p.id))];
+      $('profileCount').textContent = '实例 ' + state.items.length;
+      $('listTag').textContent = state.items.length;
+      renderList();
+    }
     await refreshList();
+    if ($('autoOpen').checked) {
+      await new Promise(r => setTimeout(r, 1500));
+      await refreshList();          // 拿真实运行状态 / 调试端口
+    }
   } finally {
     btn.disabled = false; btn.textContent = '批量创建';
   }
