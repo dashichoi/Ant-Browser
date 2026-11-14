@@ -477,30 +477,85 @@ def _err_text(exc):
     return str(exc)[:160] or exc.__class__.__name__
 
 
+# 国家码 → 中文名。ipwho.is 只给英文，这里本地翻一遍；ip-api 能直接返回中文。
+COUNTRY_ZH = {
+    "AU": "澳大利亚", "NZ": "新西兰", "US": "美国", "CA": "加拿大", "GB": "英国",
+    "IE": "爱尔兰", "DE": "德国", "FR": "法国", "NL": "荷兰", "BE": "比利时",
+    "LU": "卢森堡", "CH": "瑞士", "AT": "奥地利", "IT": "意大利", "ES": "西班牙",
+    "PT": "葡萄牙", "SE": "瑞典", "NO": "挪威", "FI": "芬兰", "DK": "丹麦",
+    "IS": "冰岛", "PL": "波兰", "CZ": "捷克", "SK": "斯洛伐克", "HU": "匈牙利",
+    "RO": "罗马尼亚", "BG": "保加利亚", "GR": "希腊", "HR": "克罗地亚", "RS": "塞尔维亚",
+    "SI": "斯洛文尼亚", "LT": "立陶宛", "LV": "拉脱维亚", "EE": "爱沙尼亚", "UA": "乌克兰",
+    "BY": "白俄罗斯", "MD": "摩尔多瓦", "RU": "俄罗斯", "TR": "土耳其", "CY": "塞浦路斯",
+    "MT": "马耳他", "JP": "日本", "KR": "韩国", "CN": "中国", "HK": "中国香港",
+    "MO": "中国澳门", "TW": "中国台湾", "SG": "新加坡", "MY": "马来西亚", "TH": "泰国",
+    "VN": "越南", "PH": "菲律宾", "ID": "印度尼西亚", "IN": "印度", "PK": "巴基斯坦",
+    "BD": "孟加拉国", "LK": "斯里兰卡", "NP": "尼泊尔", "KH": "柬埔寨", "MM": "缅甸",
+    "MN": "蒙古", "KZ": "哈萨克斯坦", "UZ": "乌兹别克斯坦", "GE": "格鲁吉亚",
+    "AM": "亚美尼亚", "AZ": "阿塞拜疆", "AE": "阿联酋", "SA": "沙特阿拉伯",
+    "QA": "卡塔尔", "KW": "科威特", "IL": "以色列", "JO": "约旦", "LB": "黎巴嫩",
+    "IQ": "伊拉克", "IR": "伊朗", "EG": "埃及", "ZA": "南非", "NG": "尼日利亚",
+    "KE": "肯尼亚", "MA": "摩洛哥", "BR": "巴西", "AR": "阿根廷", "CL": "智利",
+    "CO": "哥伦比亚", "PE": "秘鲁", "VE": "委内瑞拉", "EC": "厄瓜多尔", "UY": "乌拉圭",
+    "PY": "巴拉圭", "BO": "玻利维亚", "MX": "墨西哥", "PA": "巴拿马", "CR": "哥斯达黎加",
+    "GT": "危地马拉", "DO": "多米尼加", "CU": "古巴", "JM": "牙买加", "TT": "特立尼达和多巴哥",
+    "FJ": "斐济", "PG": "巴布亚新几内亚",
+}
+
+
+def zh_country(code, fallback=""):
+    return COUNTRY_ZH.get((code or "").upper(), fallback or "")
+
+
+def _looks_zh(text):
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text or ""))
+
+
 def geo_lookup(proxy=None, ip="", timeout=12.0):
+    """查归属地。带 proxy 时查的是代理出口 IP；不带时查指定 ip（或本机 IP）。
+
+    先用 ip-api.com 取中文结果（lang=zh-CN），失败再退回 ipwho.is（英文，用本地表翻国家）。
+    """
     started = time.time()
-    data, source = None, "ipwho.is"
+    fields = "status,message,country,countryCode,regionName,city,isp,org,query"
+
+    # 1) ip-api：可以直接给中文
     try:
+        data = _http_json("http://ip-api.com/json/%s?fields=%s&lang=zh-CN" % (ip, fields), proxy, timeout)
+        if data.get("status") != "success":
+            raise RuntimeError(data.get("message") or "ip-api 查询失败")
+        code = str(data.get("countryCode") or "").upper()
+        country = data.get("country") or ""
+        return {
+            "ip": data.get("query") or ip,
+            "code": code,
+            "country": country,
+            "countryZh": country if _looks_zh(country) else zh_country(code, country),
+            "region": data.get("regionName") or "",
+            "city": data.get("city") or "",
+            "isp": data.get("isp") or data.get("org") or "",
+            "ms": int((time.time() - started) * 1000),
+            "source": "ip-api",
+        }
+    except Exception as first:                                    # noqa: BLE001
+        # 2) ipwho.is 兜底（HTTPS 更稳，但只有英文）
         data = _http_json("https://ipwho.is/%s" % ip if ip else "https://ipwho.is/", proxy, timeout)
         if data.get("success") is False:
-            raise RuntimeError(data.get("message") or "ipwho.is 查询失败")
-    except Exception as first:                                   # noqa: BLE001
-        source = "ip-api.com"
-        fields = "status,message,country,countryCode,regionName,city,isp,org,query"
-        data = _http_json("http://ip-api.com/json/%s?fields=%s" % (ip, fields), proxy, timeout)
-        if data.get("status") != "success":
             raise RuntimeError("归属地查询失败：%s" % (data.get("message") or first))
-    conn = data.get("connection") or {}
-    return {
-        "ip": data.get("ip") or data.get("query") or ip,
-        "code": str(data.get("country_code") or data.get("countryCode") or "").upper(),
-        "country": data.get("country") or "",
-        "region": data.get("region") or data.get("regionName") or "",
-        "city": data.get("city") or "",
-        "isp": conn.get("isp") or conn.get("org") or data.get("isp") or data.get("org") or "",
-        "ms": int((time.time() - started) * 1000),
-        "source": source,
-    }
+        conn = data.get("connection") or {}
+        code = str(data.get("country_code") or data.get("countryCode") or "").upper()
+        country = data.get("country") or ""
+        return {
+            "ip": data.get("ip") or data.get("query") or ip,
+            "code": code,
+            "country": country,
+            "countryZh": zh_country(code, country),
+            "region": data.get("region") or data.get("regionName") or "",
+            "city": data.get("city") or "",
+            "isp": conn.get("isp") or conn.get("org") or data.get("isp") or data.get("org") or "",
+            "ms": int((time.time() - started) * 1000),
+            "source": "ipwho.is",
+        }
 
 
 def check_one(raw_line):

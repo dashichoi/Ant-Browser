@@ -341,7 +341,7 @@ function renderCheck() {
     return `<tr class="${isEx ? 'excluded' : ''}">
       <td>${i + 1}</td>
       <td class="mono">${esc(r.ip || r.raw)}</td>
-      <td>${esc(r.country || '—')} ${r.code ? `<span class="hint">${esc(r.code)}</span>` : ''}</td>
+      <td>${esc(r.countryZh || r.country || '—')} ${r.code ? `<span class="hint">${esc(r.code)}</span>` : ''}</td>
       <td>${esc(r.city || '—')}</td>
       <td class="mono">${r.ms ? r.ms + 'ms' : '—'}</td>
       <td>${isEx ? '<span class="pill">已排除</span>' : r.ok ? (bad ? '<span class="pill warn">非目标国</span>' : '<span class="pill ok">可用</span>')
