@@ -20,9 +20,11 @@ import concurrent.futures
 import http.client
 import json
 import os
+import random
 import re
 import socket
 import ssl
+import string
 import struct
 import sys
 import threading
@@ -212,7 +214,7 @@ SEP_RE = re.compile(r"\s*(?:----|\|\||\||\t|,)\s*")
 BASE32_RE = re.compile(r"^[A-Z2-7]{16}$|^[A-Z2-7]{26}$|^[A-Z2-7]{32}$")
 
 
-def parse_accounts(text):
+def parse_accounts(text, count=0):
     rows = []
     for idx, raw in enumerate(str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
         line = raw.strip()
@@ -233,7 +235,38 @@ def parse_accounts(text):
             account = parts[0] if parts else line
         rows.append({"line": idx, "account": account, "password": password,
                      "totp": totp, "raw": line})
+
+    # 没填账号就只按数量建：生成占位用户名 + 随机密码，实例名照常走 {idx}-{u}
+    if not rows and count:
+        try:
+            count = max(0, min(int(count), GENERATE_LIMIT))
+        except (TypeError, ValueError):
+            count = 0
+        for i in range(count):
+            rows.append({
+                "line": i + 1, "account": "", "password": "",
+                "uname": gen_name(), "passwordGen": gen_password(),
+                "totp": "", "generated": True, "raw": "",
+            })
     return rows
+
+
+# 生成占位账号用：去掉 l/0/1 这种看错的字符
+NAME_ALPHABET = "abcdefghijkmnopqrstuvwxyz23456789"
+GENERATE_LIMIT = 500
+
+
+def _rand(n, alphabet):
+    return "".join(random.choice(alphabet) for _ in range(n))
+
+
+def gen_name(n=8):
+    return _rand(n, NAME_ALPHABET)
+
+
+def gen_password(n=12):
+    pool = string.ascii_letters + string.digits
+    return _rand(n, pool)
 
 
 # ------------------------------------------------------------------ 代理池
@@ -605,6 +638,8 @@ def build_profile_name(template, acct, seq, width=3):
     name = str(template or "{idx}-{u}")
     user = acct.get("account") or ""
     local = user.split("@")[0] if "@" in user else user
+    if not local:
+        local = acct.get("uname") or ""              # 没填账号时用生成的占位名
     repl = {
         "{user}": user,
         "{u}": local,
@@ -717,7 +752,7 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
 
         if path == "/api/parse":
-            accounts = parse_accounts(body.get("accounts"))
+            accounts = parse_accounts(body.get("accounts"), body.get("count"))
             pool, errors = parse_proxy_pool(body.get("proxies"))
             names = [build_profile_name(body.get("nameTemplate") or "{idx}-{u}", r, i + 1)
                      for i, r in enumerate(accounts)]
@@ -735,7 +770,7 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         if path == "/api/allocate":
-            accounts = parse_accounts(body.get("accounts"))
+            accounts = parse_accounts(body.get("accounts"), body.get("count"))
             pool, errors = parse_proxy_pool(body.get("proxies"))
             direct = bool(body.get("direct"))
             if direct:
@@ -752,7 +787,7 @@ class Handler(BaseHTTPRequestHandler):
                     preview.append({
                         "seq": i + 1,
                         "name": build_profile_name(body.get("nameTemplate") or "{idx}-{u}", acct, i + 1),
-                        "account": acct["account"],
+                        "account": acct["account"] or acct.get("uname") or "",
                         "totp": acct["totp"],
                         "proxy": "直连" if direct else proxy_to_config(p),
                     })
@@ -782,7 +817,7 @@ class Handler(BaseHTTPRequestHandler):
                                              "notChecked": max(0, len(pool) - len(lines))})
 
         if path == "/api/create":
-            accounts = parse_accounts(body.get("accounts"))
+            accounts = parse_accounts(body.get("accounts"), body.get("count"))
             pool, perr = parse_proxy_pool(body.get("proxies"))
             direct = bool(body.get("direct"))
             per_ip = body.get("perIp") or 1
@@ -830,7 +865,10 @@ class Handler(BaseHTTPRequestHandler):
                     res = ant_create_profile(profile, auto_launch=False)
                     pid = res.get("profileId") or (res.get("profile") or {}).get("profileId")
                     created.append({"seq": i + 1, "name": name, "id": pid,
-                                    "account": acct["account"], "proxy": proxy_cfg or "直连"})
+                                    "account": acct["account"] or acct.get("uname") or "",
+                                    "password": acct.get("passwordGen") or "",
+                                    "generated": bool(acct.get("generated")),
+                                    "proxy": proxy_cfg or "直连"})
                     if auto_open and pid:
                         try:
                             ant_launch_profile(pid)
