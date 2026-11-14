@@ -20,13 +20,11 @@ import concurrent.futures
 import http.client
 import json
 import os
-import random
 import re
 import shutil
 import socket
 import sqlite3
 import ssl
-import string
 import struct
 import sys
 import threading
@@ -261,37 +259,19 @@ def parse_accounts(text, count=0):
         rows.append({"line": idx, "account": account, "password": password,
                      "totp": totp, "raw": line})
 
-    # 没填账号就只按数量建：生成占位用户名 + 随机密码，实例名照常走 {idx}-{u}
+    # 没填账号就只按数量建：不编造账号，实例名直接用序号
     if not rows and count:
         try:
             count = max(0, min(int(count), GENERATE_LIMIT))
         except (TypeError, ValueError):
             count = 0
         for i in range(count):
-            rows.append({
-                "line": i + 1, "account": "", "password": "",
-                "uname": gen_name(), "passwordGen": gen_password(),
-                "totp": "", "generated": True, "raw": "",
-            })
+            rows.append({"line": i + 1, "account": "", "password": "",
+                         "totp": "", "raw": "", "placeholder": True})
     return rows
 
 
-# 生成占位账号用：去掉 l/0/1 这种看错的字符
-NAME_ALPHABET = "abcdefghijkmnopqrstuvwxyz23456789"
 GENERATE_LIMIT = 500
-
-
-def _rand(n, alphabet):
-    return "".join(random.choice(alphabet) for _ in range(n))
-
-
-def gen_name(n=8):
-    return _rand(n, NAME_ALPHABET)
-
-
-def gen_password(n=12):
-    pool = string.ascii_letters + string.digits
-    return _rand(n, pool)
 
 
 # ------------------------------------------------------------------ 代理池
@@ -660,11 +640,11 @@ def allocate(accounts, proxies, per_ip=1, mode="seq", on_short="reuse"):
 
 
 def build_profile_name(template, acct, seq, width=3):
-    name = str(template or "{idx}-{u}")
     user = acct.get("account") or ""
     local = user.split("@")[0] if "@" in user else user
     if not local:
-        local = acct.get("uname") or ""              # 没填账号时用生成的占位名
+        return str(seq)                              # 没账号：名字就用序号，不编造
+    name = str(template or "{idx}-{u}")
     repl = {
         "{user}": user,
         "{u}": local,
@@ -674,7 +654,7 @@ def build_profile_name(template, acct, seq, width=3):
     }
     for k, v in repl.items():
         name = name.replace(k, v)
-    return name.strip() or local or ("profile-%s" % seq)
+    return name.strip() or local or str(seq)
 
 
 def build_fingerprint_args(seed, extra):
@@ -949,7 +929,7 @@ class Handler(BaseHTTPRequestHandler):
                     preview.append({
                         "seq": i + 1,
                         "name": build_profile_name(body.get("nameTemplate") or "{idx}-{u}", acct, i + 1),
-                        "account": acct["account"] or acct.get("uname") or "",
+                        "account": acct["account"],
                         "totp": acct["totp"],
                         "proxy": "直连" if direct else proxy_to_config(p),
                     })
@@ -1027,9 +1007,7 @@ class Handler(BaseHTTPRequestHandler):
                     res = ant_create_profile(profile, auto_launch=False)
                     pid = res.get("profileId") or (res.get("profile") or {}).get("profileId")
                     created.append({"seq": i + 1, "name": name, "id": pid,
-                                    "account": acct["account"] or acct.get("uname") or "",
-                                    "password": acct.get("passwordGen") or "",
-                                    "generated": bool(acct.get("generated")),
+                                    "account": acct["account"],
                                     "proxy": proxy_cfg or "直连"})
                     if auto_open and pid:
                         try:

@@ -105,17 +105,6 @@ Xxx12883----R32HZLJPLA37Q7PN----CaseyKumlander2486@outlook.com
         <div class="spacer"></div>
         <button class="sm" id="btnParse">解析</button>
       </div>
-      <div class="scroll" id="genWrap" style="display:none;margin-top:10px;max-height:220px">
-        <table>
-          <thead><tr><th>#</th><th>用户名</th><th>密码</th></tr></thead>
-          <tbody id="genBody"></tbody>
-        </table>
-      </div>
-      <div class="row" id="genTools" style="display:none;margin-top:6px">
-        <span class="hint" id="genHint"></span>
-        <div class="spacer"></div>
-        <button class="sm" id="btnCopyGen">复制账号密码</button>
-      </div>
     </section>
 
     <section class="card">
@@ -313,14 +302,13 @@ async function parseNow() {
   });
   if (!data.ok) { setErr($('createErr'), data.error || '解析失败'); return; }
   state.accounts = data.accounts || [];
-  const gen = state.accounts.filter(a => a.generated);
+  const blank = state.accounts.filter(a => a.placeholder);
   $('acctTag').textContent = state.accounts.length + ' 个';
   $('proxyTag').textContent = (data.proxyCount || 0) + ' 条';
-  $('acctSummary').textContent = gen.length
-    ? `没填账号，将生成 ${gen.length} 个占位账号（用户名 + 随机密码）`
+  $('acctSummary').textContent = blank.length
+    ? `没填账号，按序号建 ${blank.length} 个实例：${(data.names || []).slice(0, 6).join('、')}${blank.length > 6 ? ' …' : ''}`
     : `识别到 ${state.accounts.length} 个账号，其中 ${data.withTotp} 个带 2FA` +
       (data.duplicates?.length ? ` · ${data.duplicates.length} 个名称与现有实例重名` : '');
-  renderGenerated(gen);
   setErr($('createErr'), data.duplicates?.length
     ? '这些实例名已存在，创建前请改名称模板（加 {seq}）：\n' + data.duplicates.slice(0, 8).join('、')
     : '');
@@ -331,18 +319,6 @@ async function parseNow() {
   const c = $('capacity');
   c.textContent = `${data.proxyCount || 0} × ${Math.max(1, +$('perIp').value || 1)} = ${cap} 实例 / 需 ${need}`;
   c.className = 'pill ' + (need === 0 ? '' : cap >= need ? 'ok' : 'warn');
-}
-
-function renderGenerated(gen) {
-  const wrap = $('genWrap'), tools = $('genTools');
-  state.generated = gen || [];
-  if (!gen || !gen.length) { wrap.style.display = 'none'; tools.style.display = 'none'; return; }
-  wrap.style.display = 'block';
-  tools.style.display = 'flex';
-  $('genBody').innerHTML = gen.map((a, i) => `<tr>
-    <td>${i + 1}</td><td class="mono">${esc(a.uname || '')}</td><td class="mono">${esc(a.passwordGen || '')}</td>
-  </tr>`).join('');
-  $('genHint').textContent = `共 ${gen.length} 个占位账号，创建后可直接用来登录`;
 }
 
 // ---------- 检测 ----------
@@ -564,17 +540,6 @@ $('filter').oninput = renderList;
 $('perIp').onchange = parseNow;
 $('nameTpl').onchange = parseNow;
 $('count').onchange = parseNow;
-$('btnCopyGen').onclick = async () => {
-  const rows = state.generated || [];
-  if (!rows.length) return;
-  const text = rows.map(a => `${a.uname}----${a.passwordGen}`).join('\n');
-  try {
-    await navigator.clipboard.writeText(text);
-    $('genHint').textContent = `已复制 ${rows.length} 条到剪贴板`;
-  } catch {
-    window.prompt('复制下面内容：', text);
-  }
-};
 $('expectCode').onchange = renderCheck;
 
 (async function boot() {
