@@ -1046,8 +1046,15 @@ class Handler(BaseHTTPRequestHandler):
                 return json_response(self, 400, {"ok": False, "error": "需要 confirm=true"})
             try:
                 return json_response(self, 200, trash_purge(body.get("keepDays") or 0))
-            except Exception as exc:                        # noqa: BLE001
-                return json_response(self, 200, {"ok": False, "error": str(exc)})
+            except BaseException as exc:                    # noqa: BLE001
+                # 一次删几百个文件时，某些环境的安全策略会中断删除（异常不一定继承 Exception），
+                # 这里兜住，至少让前端拿到一句话而不是断连接。
+                msg = str(exc) or exc.__class__.__name__
+                return json_response(self, 200, {
+                    "ok": False,
+                    "error": "清理被中断：%s。如果提示要删的文件太多，改用命令行 "
+                             "`python purge-trash.py --app \"<Ant目录>\" --force`。" % msg[:200],
+                })
 
         if path == "/api/action":
             action = (body.get("action") or "").strip()

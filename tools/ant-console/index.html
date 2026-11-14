@@ -522,7 +522,13 @@ async function purgeTrash() {
   const btn = $('btnPurgeTrash');
   btn.disabled = true; btn.textContent = '清理中…';
   try {
-    const data = await api('/api/trash/purge', { confirm: true });
+    let data;
+    try {
+      data = await api('/api/trash/purge', { confirm: true });
+    } catch (e) {
+      setErr($('listErr'), '清理请求中断：' + e.message + '\n如果提示要删的文件太多，改用命令行 purge-trash.py --force');
+      return;
+    }
     if (!data.ok) { setErr($('listErr'), data.error || '清理失败'); return; }
     const fail = (data.failed || []).length;
     setErr($('listErr'), fail ? '部分未清理：\n' + data.failed.slice(0, 6).map(f => `${f.name}：${f.error}`).join('\n') : '');
