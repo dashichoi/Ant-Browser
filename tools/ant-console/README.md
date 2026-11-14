@@ -81,6 +81,17 @@ macOS 双击 `start.command`，Windows 双击 `start.bat`。
      桥接的代理（Chromium 的 `--proxy-server` 带不了凭据）。
    - 直连：勾「直连」则不写 proxyConfig。
 6. **实例**：实时拉 Ant 的列表，勾选后批量打开 / 停止 / 删除。
+7. **回收站**：实例区右上角会显示「回收站 N 个 · 大小」，点「清空回收站」直接彻底删除
+   （连浏览器用户数据、快照、快捷码一起清，最后 VACUUM）。**Ant 开着也能清**——
+   走 WAL 并发写，不需要停 Ant。正在被存活实例占用的目录会自动跳过。
+
+   命令行版本（Ant 没开、或者要按天数过滤时用）：
+
+   ```bash
+   python purge-trash.py --app "C:/Cdoe/AntBrowser"                    # 预览
+   python purge-trash.py --app "C:/Cdoe/AntBrowser" --force            # 真删
+   python purge-trash.py --app "C:/Cdoe/AntBrowser" --force --keep-days 3
+   ```
 
 ## 它调了哪些 Ant 接口
 

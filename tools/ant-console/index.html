@@ -194,6 +194,8 @@ http://1.2.3.4:3128:user:pass
       <button class="sm" id="btnStop">停止选中</button>
       <button class="sm danger" id="btnDelete">删除选中</button>
       <div class="spacer"></div>
+      <span class="pill" id="trashInfo" style="display:none">回收站 —</span>
+      <button class="sm danger" id="btnPurgeTrash" style="display:none">清空回收站</button>
       <input type="text" id="filter" placeholder="按名称 / 代理过滤" style="width:200px">
       <span class="hint" id="selCount">已选 0</span>
     </div>
@@ -212,7 +214,7 @@ http://1.2.3.4:3128:user:pass
 
 <script>
 const $ = id => document.getElementById(id);
-const state = { accounts: [], poolBackup: null, lastCheck: [], selected: new Set(), items: [] };
+const state = { accounts: [], poolBackup: null, lastCheck: [], selected: new Set(), items: [], trash: [], generated: [] };
 
 function setErr(el, text) {
   if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
@@ -262,6 +264,7 @@ async function refreshList(retry = 2) {
   $('profileCount').textContent = '实例 ' + state.items.length;
   $('listTag').textContent = state.items.length;
   renderList();
+  refreshTrash();
 }
 function renderList() {
   const kw = $('filter').value.trim().toLowerCase();
@@ -494,6 +497,44 @@ async function doAction(action) {
   await refreshList();
 }
 
+// ---------- 回收站 ----------
+async function refreshTrash() {
+  const data = await api('/api/trash');
+  const pill = $('trashInfo'), btn = $('btnPurgeTrash');
+  if (!data.ok) { pill.style.display = 'none'; btn.style.display = 'none'; return; }
+  if (!data.count) {
+    pill.style.display = 'none'; btn.style.display = 'none';
+    state.trash = [];
+    return;
+  }
+  state.trash = data.items || [];
+  pill.style.display = 'inline-flex';
+  pill.className = 'pill warn';
+  pill.textContent = `回收站 ${data.count} 个 · ${data.size}`;
+  btn.style.display = 'inline-block';
+  btn.textContent = `清空回收站（${data.size}）`;
+}
+
+async function purgeTrash() {
+  const n = (state.trash || []).length;
+  if (!n) return;
+  if (!confirm(`彻底删除回收站里 ${n} 个实例？\n会删掉浏览器用户数据、快照、快捷码，不可恢复。\n（正在运行的实例不会被碰）`)) return;
+  const btn = $('btnPurgeTrash');
+  btn.disabled = true; btn.textContent = '清理中…';
+  try {
+    const data = await api('/api/trash/purge', { confirm: true });
+    if (!data.ok) { setErr($('listErr'), data.error || '清理失败'); return; }
+    const fail = (data.failed || []).length;
+    setErr($('listErr'), fail ? '部分未清理：\n' + data.failed.slice(0, 6).map(f => `${f.name}：${f.error}`).join('\n') : '');
+    setWarn($('createWarn'), `已彻底删除 ${data.deleted.length} 个，释放 ${data.freedText}`
+      + (fail ? `，${fail} 个跳过` : ''));
+    await refreshList();
+  } finally {
+    btn.disabled = false;
+    await refreshTrash();
+  }
+}
+
 // ---------- 绑定 ----------
 $('btnRefresh').onclick = () => health();
 $('btnPort').onclick = () => health(+$('antPort').value || 19900);
@@ -507,6 +548,7 @@ $('btnOpen').onclick = () => doAction('open');
 $('btnStop').onclick = () => doAction('stop');
 $('btnDelete').onclick = () => doAction('delete');
 $('btnSelAll').onclick = () => { state.items.forEach(p => state.selected.add(p.id)); renderList(); };
+$('btnPurgeTrash').onclick = purgeTrash;
 $('btnSelNone').onclick = () => { state.selected.clear(); renderList(); };
 $('chkAll').onchange = e => {
   state.items.forEach(p => e.target.checked ? state.selected.add(p.id) : state.selected.delete(p.id));
@@ -533,6 +575,7 @@ $('expectCode').onchange = renderCheck;
   const cfg = await api('/api/config').catch(() => null);
   if (cfg && cfg.antPort) $('antPort').value = cfg.antPort;
   await health(cfg ? cfg.antPort : undefined);
+  refreshTrash();
   if ($('accounts').value.trim()) parseNow();
 })();
 </script>

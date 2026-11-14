@@ -22,13 +22,16 @@ import json
 import os
 import random
 import re
+import shutil
 import socket
+import sqlite3
 import ssl
 import string
 import struct
 import sys
 import threading
 import time
+from datetime import datetime, timedelta
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -140,6 +143,28 @@ def load_app_config():
 
 CFG = load_app_config()
 CFG_LOCK = threading.Lock()
+
+
+def guess_app_dir():
+    """Ant 的安装目录（要能找到 data/app.db）。安装版不在仓库里，所以按常见位置猜一遍。"""
+    env = os.environ.get("ANT_APP_DIR")
+    if env and (Path(env) / "data" / "app.db").exists():
+        return Path(env)
+    candidates = [
+        APP_ROOT,
+        Path("C:/Cdoe/AntBrowser"),
+        Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Ant Browser",
+    ]
+    for cand in candidates:
+        try:
+            if (cand / "data" / "app.db").exists():
+                return cand
+        except OSError:
+            continue
+    return APP_ROOT
+
+
+ANT_APP_DIR = guess_app_dir()
 
 
 def ant_base():
@@ -672,6 +697,137 @@ def build_fingerprint_args(seed, extra):
     return args
 
 
+# ------------------------------------------------------------------ 回收站
+# Ant 的删除是软删除（deleted_at），界面只能逐个「彻底删除」，72 小时才自动清。
+# 这里直接操作同一份 sqlite + 实例目录，复刻 PermanentlyDelete 的顺序。
+def _db_path():
+    return ANT_APP_DIR / "data" / "app.db"
+
+
+def _dir_size(path):
+    total = 0
+    if not path.exists():
+        return 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _human(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return "%.1f%s" % (n, unit)
+        n /= 1024
+    return "%.1fTB" % n
+
+
+def _resolve_dir(udd, pid, data_root):
+    p = Path(udd or pid)
+    target = p if p.is_absolute() else (data_root / (udd or pid))
+    try:
+        return target.resolve()
+    except OSError:
+        return data_root / (udd or pid)
+
+
+def _alive_dirs(conn, data_root):
+    alive = set()
+    for r in conn.execute("select profile_id, user_data_dir from browser_profiles "
+                          "where deleted_at is null or deleted_at = ''"):
+        alive.add(_resolve_dir(r["user_data_dir"], r["profile_id"], data_root))
+    return alive
+
+
+def trash_snapshot():
+    db = _db_path()
+    if not db.exists():
+        return {"ok": False, "error": "找不到数据库：%s（用 ANT_APP_DIR 指定 Ant 目录）" % db}
+    data_root = (ANT_APP_DIR / "data").resolve()
+    conn = sqlite3.connect(str(db), timeout=8)
+    conn.row_factory = sqlite3.Row
+    try:
+        alive = _alive_dirs(conn, data_root)
+        rows = conn.execute(
+            "select profile_id, profile_name, user_data_dir, deleted_at from browser_profiles "
+            "where deleted_at is not null and deleted_at <> '' order by deleted_at"
+        ).fetchall()
+        items, total = [], 0
+        for r in rows:
+            target = _resolve_dir(r["user_data_dir"], r["profile_id"], data_root)
+            snap = data_root / "snapshots" / r["profile_id"]
+            size = _dir_size(target) + _dir_size(snap)
+            inside = (data_root in target.parents) or target == data_root
+            busy = target in alive
+            total += size
+            items.append({"id": r["profile_id"], "name": r["profile_name"] or "(未命名)",
+                          "deletedAt": r["deleted_at"][:19], "dir": target.name,
+                          "bytes": size, "size": _human(size),
+                          "deletable": bool(inside and not busy),
+                          "blocked": "仍被存活实例占用" if busy else ("" if inside else "路径不在 data 下")})
+        return {"ok": True, "count": len(items), "bytes": total, "size": _human(total),
+                "items": items, "appDir": str(ANT_APP_DIR)}
+    finally:
+        conn.close()
+
+
+def trash_purge(keep_days=0):
+    db = _db_path()
+    if not db.exists():
+        return {"ok": False, "error": "找不到数据库：%s" % db}
+    data_root = (ANT_APP_DIR / "data").resolve()
+    cutoff = ""
+    if keep_days and keep_days > 0:
+        cutoff = (datetime.now() - timedelta(days=float(keep_days))).strftime("%Y-%m-%dT%H:%M:%S")
+    conn = sqlite3.connect(str(db), timeout=8)
+    conn.row_factory = sqlite3.Row
+    deleted, failed, freed = [], [], 0
+    try:
+        alive = _alive_dirs(conn, data_root)
+        rows = conn.execute(
+            "select profile_id, profile_name, user_data_dir, deleted_at from browser_profiles "
+            "where deleted_at is not null and deleted_at <> '' order by deleted_at"
+        ).fetchall()
+        for r in rows:
+            if cutoff and r["deleted_at"][:19] < cutoff:
+                continue
+            pid = r["profile_id"]
+            target = _resolve_dir(r["user_data_dir"], pid, data_root)
+            inside = (data_root in target.parents) or target == data_root
+            if target in alive or not inside or target == data_root:
+                failed.append({"name": r["profile_name"], "error": "目录受保护，已跳过"})
+                continue
+            size = _dir_size(target)
+            try:
+                if target.exists():
+                    shutil.rmtree(target)
+                snap = data_root / "snapshots" / pid
+                if snap.exists():
+                    shutil.rmtree(snap, ignore_errors=True)
+                conn.execute("delete from launch_codes where profile_id = ?", (pid,))
+                conn.execute("delete from browser_profile_extension_settings where profile_id = ?", (pid,))
+                conn.execute("delete from browser_profile_extension_runtime where profile_id = ?", (pid,))
+                conn.execute("delete from browser_profiles where profile_id = ?", (pid,))
+                conn.commit()
+                freed += size
+                deleted.append({"name": r["profile_name"], "size": _human(size)})
+            except Exception as exc:                        # noqa: BLE001
+                conn.rollback()
+                failed.append({"name": r["profile_name"], "error": str(exc)})
+        if deleted:
+            try:
+                conn.execute("vacuum")
+            except sqlite3.Error:
+                pass
+        return {"ok": True, "deleted": deleted, "failed": failed,
+                "freed": freed, "freedText": _human(freed)}
+    finally:
+        conn.close()
+
+
 # ------------------------------------------------------------------ HTTP 服务
 def json_response(handler, code, payload):
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -739,9 +895,15 @@ class Handler(BaseHTTPRequestHandler):
                 return json_response(self, 200, {"ok": True, "items": slim})
             except AntError as exc:
                 return json_response(self, 200, {"ok": False, "error": str(exc)})
+        if path == "/api/trash":
+            try:
+                return json_response(self, 200, trash_snapshot())
+            except Exception as exc:                        # noqa: BLE001
+                return json_response(self, 200, {"ok": False, "error": str(exc)})
         if path == "/api/config":
             return json_response(self, 200, {"ok": True, "antPort": ANT_PORT,
                                              "localPort": LOCAL_PORT,
+                                             "appDir": str(ANT_APP_DIR),
                                              "defaultFingerprintArgs": CFG.get("default_fingerprint_args"),
                                              "defaultLaunchArgs": CFG.get("default_launch_args"),
                                              "coreId": CFG.get("core_id")})
@@ -878,6 +1040,14 @@ class Handler(BaseHTTPRequestHandler):
                     failed.append({"name": name, "error": str(exc)})
             return json_response(self, 200, {"ok": True, "created": created,
                                              "failed": failed, "warnings": warn})
+
+        if path == "/api/trash/purge":
+            if not body.get("confirm"):
+                return json_response(self, 400, {"ok": False, "error": "需要 confirm=true"})
+            try:
+                return json_response(self, 200, trash_purge(body.get("keepDays") or 0))
+            except Exception as exc:                        # noqa: BLE001
+                return json_response(self, 200, {"ok": False, "error": str(exc)})
 
         if path == "/api/action":
             action = (body.get("action") or "").strip()
