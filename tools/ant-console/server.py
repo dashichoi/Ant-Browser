@@ -144,7 +144,7 @@ def ant_base():
     return "http://127.0.0.1:%d" % ANT_PORT
 
 
-ANT_PORT = CFG["ant_port"] if 0 < CFG["ant_port"] < 65536 else DEFAULT_ANT_PORT
+ANT_PORT = int(os.environ.get("ANT_PORT") or (CFG["ant_port"] if 0 < CFG["ant_port"] < 65536 else DEFAULT_ANT_PORT))
 
 # ------------------------------------------------------------------ Ant API 客户端
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -203,7 +203,8 @@ def ant_stop_profile(profile_id):
 
 
 def ant_launch_profile(profile_id):
-    return ant_request("POST", "/api/launch", {"profileId": profile_id, "matchMode": "id"})
+    # matchMode 只认 unique / first / all；按 profileId 精确启动用 unique
+    return ant_request("POST", "/api/launch", {"profileId": profile_id, "matchMode": "unique"})
 
 
 # ------------------------------------------------------------------ 账号解析
