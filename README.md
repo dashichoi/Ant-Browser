@@ -1,10 +1,12 @@
 ﻿# Ant Browser
 
 > 面向多账号隔离、代理绑定和本地环境管理的桌面浏览器工具（Windows / Linux / macOS unsigned）。
+>
+> **这是二次开发分支**，由 [@dashichoi](https://github.com/dashichoi) 维护，基于上游 [black-ant/Ant-Browser](https://github.com/black-ant/Ant-Browser)。上游最新停在 `1.9.3`，本分支在其之上继续迭代，差异见 [与上游的差异](#与上游的差异)。
 
-[![Release](https://img.shields.io/github/v/release/black-ant/Ant-Browser?sort=semver)](https://github.com/black-ant/Ant-Browser/releases)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)](https://github.com/black-ant/Ant-Browser/releases)
-[![Issues](https://img.shields.io/github/issues/black-ant/Ant-Browser)](https://github.com/black-ant/Ant-Browser/issues)
+[![Release](https://img.shields.io/github/v/release/dashichoi/Ant-Browser?sort=semver)](https://github.com/dashichoi/Ant-Browser/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)](https://github.com/dashichoi/Ant-Browser/releases)
+[![Issues](https://img.shields.io/github/issues/dashichoi/Ant-Browser)](https://github.com/dashichoi/Ant-Browser/issues)
 
 当前版本：`1.9.3` · 2026-11-11
 
@@ -23,6 +25,7 @@ Ant Browser 的目标很明确：在一台桌面设备上，帮助用户稳定�
 ## 目录
 
 - [项目简介](#项目简介)
+- [与上游的差异](#与上游的差异)
 - [近期更新](#近期更新)
 - [更新日志](CHANGELOG.md)
 - [核心特性](#核心特性)
@@ -52,6 +55,20 @@ Ant Browser 适合以下场景：
 - 给每个实例绑定独立代理
 - 统一管理浏览器内核、标签、关键字和快捷打开码
 - 在本地保存配置和运行数据，便于自主控制
+
+## 与上游的差异
+
+本分支在上游 `1.9.3` 基础上继续开发，当前主要增量：
+
+| 方向 | 内容 | 位置 |
+| --- | --- | --- |
+| 批量运营 | 批量控制台：账号解析 → 代理池 → 穿代理查出口国 → IP 分配 → 批量建实例 / 启停 | `tools/ant-console/` |
+| macOS 兼容 | 补齐内核与脚本执行位；`dev.sh` / `run-app.sh` 去掉 `ss`、`pkg-config`、`setsid`、`stat -c` 等 Linux 专有依赖 | `scripts/`、`bin/darwin-*` |
+| 文档 | 代理双栈规则、跨机器交接说明 | `docs/proxy-connector-stacks.md`、`HANDOFF.md` |
+
+批量控制台不修改应用源码，只调用 Ant Browser 自带的本地 HTTP 接口，可以单独使用。
+
+跨机器接手（含 macOS 首次上手、打包、已知限制）统一看 [`HANDOFF.md`](HANDOFF.md)。
 
 ## 近期更新
 
@@ -196,11 +213,11 @@ Ant Browser 适合以下场景：
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=black-ant%2Fant-browser&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=dashichoi%2Fant-browser&type=date&legend=top-left">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=black-ant/ant-browser&type=date&theme=dark&legend=top-left" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=black-ant/ant-browser&type=date&legend=top-left" />
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=black-ant/ant-browser&type=date&legend=top-left" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=dashichoi/ant-browser&type=date&theme=dark&legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=dashichoi/ant-browser&type=date&legend=top-left" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=dashichoi/ant-browser&type=date&legend=top-left" />
   </picture>
 </a>
 
@@ -217,7 +234,7 @@ Ant Browser 适合以下场景：
 
 ### 下载与运行
 
-1. 前往 Releases 页面下载最新版本：<https://github.com/black-ant/Ant-Browser/releases>
+1. 前往 Releases 页面下载最新版本：<https://github.com/dashichoi/Ant-Browser/releases>
 2. 安装版直接运行 `AntBrowser-Setup-*.exe`
 3. 便携版解压后运行 `ant-chrome.exe`
 4. Linux 包下载后可直接安装 `ant-browser_<version>_<arch>.deb`，或解压 `tar.gz` 后运行 `ant-chrome`
@@ -416,8 +433,8 @@ Windows 升级或卸载旧版本时，安装器会先将旧安装目录中的 `b
 
 ## 支持与反馈
 
-- Releases：<https://github.com/black-ant/Ant-Browser/releases>
-- Issues：<https://github.com/black-ant/Ant-Browser/issues>
+- Releases：<https://github.com/dashichoi/Ant-Browser/releases>
+- Issues：<https://github.com/dashichoi/Ant-Browser/issues>
 - 感谢以下社区的支持：<https://linux.do/>
 
 ## License
