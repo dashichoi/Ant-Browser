@@ -602,13 +602,14 @@ def allocate(accounts, proxies, per_ip=1, mode="seq", on_short="reuse"):
 
 
 def build_profile_name(template, acct, seq, width=3):
-    name = str(template or "{u}")
+    name = str(template or "{idx}-{u}")
     user = acct.get("account") or ""
     local = user.split("@")[0] if "@" in user else user
     repl = {
         "{user}": user,
         "{u}": local,
-        "{seq}": str(seq).zfill(width),
+        "{idx}": str(seq),                       # 从 1 开始，不补零
+        "{seq}": str(seq).zfill(width),          # 001 这种，方便排序
         "{date}": time.strftime("%Y%m%d"),
     }
     for k, v in repl.items():
@@ -718,7 +719,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/parse":
             accounts = parse_accounts(body.get("accounts"))
             pool, errors = parse_proxy_pool(body.get("proxies"))
-            names = [build_profile_name(body.get("nameTemplate") or "{u}", r, i + 1)
+            names = [build_profile_name(body.get("nameTemplate") or "{idx}-{u}", r, i + 1)
                      for i, r in enumerate(accounts)]
             existing = set()
             try:
@@ -750,7 +751,7 @@ class Handler(BaseHTTPRequestHandler):
                     p = pool[idx[i]] if not direct else None
                     preview.append({
                         "seq": i + 1,
-                        "name": build_profile_name(body.get("nameTemplate") or "{u}", acct, i + 1),
+                        "name": build_profile_name(body.get("nameTemplate") or "{idx}-{u}", acct, i + 1),
                         "account": acct["account"],
                         "totp": acct["totp"],
                         "proxy": "直连" if direct else proxy_to_config(p),
@@ -805,7 +806,7 @@ class Handler(BaseHTTPRequestHandler):
             auto_open = bool(body.get("autoOpen"))
             created, failed = [], []
             for i, acct in enumerate(accounts):
-                name = build_profile_name(body.get("nameTemplate") or "{u}", acct, i + 1)
+                name = build_profile_name(body.get("nameTemplate") or "{idx}-{u}", acct, i + 1)
                 if direct:
                     proxy_cfg, proxy_mode = "", "fixed"
                 else:

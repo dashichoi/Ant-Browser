@@ -142,7 +142,8 @@ http://1.2.3.4:3128:user:pass
       <div class="fld"><label>IP 不够时</label>
         <select id="onShort"><option value="reuse">循环复用</option><option value="error">直接报错</option></select>
       </div>
-      <div class="fld"><label>实例名模板</label><input type="text" id="nameTpl" value="{u}" style="width:120px"></div>
+      <div class="fld"><label>实例名模板</label><input type="text" id="nameTpl" value="{idx}-{u}" style="width:130px"
+        title="{idx}=从 1 开始的序号　{seq}=001 补零序号　{u}=邮箱前缀　{user}=完整邮箱　{date}=日期"></div>
       <div class="fld"><label>时区</label><input type="text" id="timezone" value="Australia/Sydney" style="width:150px"></div>
       <div class="fld"><label>指纹种子前缀</label><input type="text" id="seedBase" value="7" style="width:90px"></div>
       <div class="fld"><label>标签</label><input type="text" id="tags" value="bybit" style="width:110px"></div>
@@ -238,6 +239,8 @@ async function refreshList(retry = 2) {
   }
   setErr($('listErr'), '');
   state.items = data.items || [];
+  // Ant 返回的是「最新在前」，这里按创建时间正序排，和账号/序号顺序对齐
+  state.items.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
   $('profileCount').textContent = '实例 ' + state.items.length;
   $('listTag').textContent = state.items.length;
   renderList();
